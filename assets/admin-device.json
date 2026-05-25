@@ -1,0 +1,5 @@
+{
+  "mode": "this-laptop-admin",
+  "activate": "Open index.html#this-laptop-admin on the laptop that should give every local login Admin access.",
+  "scope": "This works through this browser's local saved setting on that laptop."
+}

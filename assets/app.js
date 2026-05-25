@@ -2,6 +2,9 @@ const root = document.querySelector("#screen-root");
 const progressDots = [...document.querySelectorAll(".step-dot")];
 const themeToggle = document.querySelector("#theme-toggle");
 const THEME_STORAGE_KEY = "secure-entry-theme";
+const LOCAL_USERS_STORAGE_KEY = "secure-entry-local-users";
+const LOCAL_DEVICE_ADMIN_STORAGE_KEY = "secure-entry-this-laptop-admin";
+const LOCAL_DEVICE_ADMIN_HASH = "this-laptop-admin";
 const LOCAL_ADMIN_USERNAMES = ["avaneesh"];
 let sessionValidationInFlight = false;
 let deferredInstallPrompt = null;
@@ -75,6 +78,10 @@ function clearSession() {
 
 function getRoute() {
   const hash = window.location.hash.replace(/^#/, "");
+  if (hash === LOCAL_DEVICE_ADMIN_HASH) {
+    return { name: "device-admin-setup" };
+  }
+
   if (hash.startsWith("verify/")) {
     return { name: "confirm", token: hash.split("/")[1] };
   }
@@ -136,6 +143,11 @@ function render() {
 
   if (route.name === "profile") {
     renderProfileScreen();
+    return;
+  }
+
+  if (route.name === "device-admin-setup") {
+    renderDeviceAdminSetupScreen();
     return;
   }
 
@@ -386,6 +398,36 @@ function renderProfileScreen() {
   });
 }
 
+function renderDeviceAdminSetupScreen() {
+  markThisLaptopAsAdminDevice();
+
+  root.innerHTML = `
+    <section class="screen">
+      <p class="screen-kicker">Laptop admin</p>
+      <h1>This laptop is marked for Admin access</h1>
+      <p class="screen-copy">Anyone who logs in from this browser on this laptop will see the Admin tab. Other laptops will not get this marker automatically.</p>
+
+      <div class="notice">
+        <strong>Admin marker saved</strong>
+        <span>The setting is stored only in this browser on this laptop.</span>
+      </div>
+
+      <div class="actions">
+        <button class="button warning" type="button" id="continue-login">Continue to login</button>
+      </div>
+    </section>
+  `;
+
+  document.querySelector("#continue-login").addEventListener("click", () => {
+    if (state.verified) {
+      goTo("app");
+      return;
+    }
+
+    goTo("credentials");
+  });
+}
+
 function renderSentScreen() {
   if (!state.email || !state.deliveryStatus) {
     goTo("credentials");
@@ -535,6 +577,7 @@ async function renderConfirmScreen(token) {
         state.latestAiModel = null;
         state.rejoinToken = "";
         state.rejoinMessage = "";
+        recordLocalUserFromState();
         saveSession();
         goTo("app");
       } catch (error) {
@@ -628,6 +671,13 @@ function renderAppScreen() {
   }
 
   validateCurrentSession();
+  const localAdminRole = getLocalRoleForUsername(state.username);
+  if (localAdminRole && state.role !== localAdminRole) {
+    state.role = localAdminRole;
+    recordLocalUserFromState();
+    saveSession();
+  }
+
   ensureAgentGreeting();
   if (state.activeAppTab === "admin" && !canUseAdminTab()) {
     state.activeAppTab = "account";
@@ -1245,10 +1295,7 @@ async function requestAiModel(prompt) {
 
 async function loadAdminUsers({ force = false } = {}) {
   if (!state.sessionToken) {
-    state.adminStatus = "error";
-    state.adminMessage = "Please login again before opening Admin.";
-    saveSession();
-    renderAppScreen();
+    loadLocalAdminUsers();
     return;
   }
 
@@ -1295,6 +1342,11 @@ async function loadAdminUsers({ force = false } = {}) {
 }
 
 async function runAdminAction({ email, action, days }) {
+  if (!state.sessionToken) {
+    runLocalAdminAction({ email, action, days });
+    return;
+  }
+
   state.adminStatus = "loading";
   state.adminMessage = "Updating admin records...";
   state.adminPreviewLink = "";
@@ -1342,6 +1394,119 @@ async function runAdminAction({ email, action, days }) {
   renderAppScreen();
 }
 
+function loadLocalAdminUsers() {
+  recordLocalUserFromState();
+  const users = getLocalUsers();
+  const actor = users[state.email] || null;
+
+  state.adminActor = actor;
+  state.adminUsers = Object.values(users).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+  state.adminStatus = "ready";
+  state.adminMessage = "Admin tab opened from this browser's saved users.";
+  state.adminPreviewLink = "";
+
+  if (actor) {
+    state.role = actor.role || state.role;
+    state.status = actor.status || state.status;
+    state.pro = Boolean(actor.pro);
+  }
+
+  saveSession();
+  renderAppScreen();
+}
+
+function runLocalAdminAction({ email, action, days }) {
+  const users = getLocalUsers();
+  const target = users[email];
+
+  if (!target) {
+    state.adminStatus = "error";
+    state.adminMessage = "User registration was not found in this browser.";
+    saveSession();
+    renderAppScreen();
+    return;
+  }
+
+  const disabledReason = getDisabledAdminActionReason(target, action);
+  if (disabledReason) {
+    state.adminStatus = "error";
+    state.adminMessage = disabledReason;
+    saveSession();
+    renderAppScreen();
+    return;
+  }
+
+  const now = Date.now();
+  if (action === "suspend") {
+    const suspensionDays = clampLocalSuspensionDays(days);
+    target.status = "suspended";
+    target.suspendedAt = now;
+    target.suspendedUntil = now + suspensionDays * 24 * 60 * 60 * 1000;
+    target.suspensionDays = suspensionDays;
+  } else if (action === "remove") {
+    target.status = "removed";
+    target.role = "user";
+    target.pro = false;
+    target.removedAt = now;
+    target.removedBy = state.email;
+    target.rejoinRequired = true;
+  } else if (action === "make-pre-admin") {
+    target.role = "pre-admin";
+    target.status = "active";
+    target.suspendedAt = null;
+    target.suspendedUntil = null;
+    target.suspensionDays = null;
+  } else if (action === "make-admin") {
+    target.role = "admin";
+    target.status = "active";
+    target.suspendedAt = null;
+    target.suspendedUntil = null;
+    target.suspensionDays = null;
+  } else if (action === "give-free-pro") {
+    target.pro = true;
+    target.proGrantedAt = now;
+    target.proValueUsd = 25;
+  } else if (action === "send-rejoin-link") {
+    target.lastRejoinLinkAt = now;
+    state.adminPreviewLink = `${window.location.href.split("#")[0]}#rejoin/local-${now}`;
+  } else {
+    state.adminStatus = "error";
+    state.adminMessage = "Unknown admin action.";
+    saveSession();
+    renderAppScreen();
+    return;
+  }
+
+  target.updatedAt = now;
+  users[email] = target;
+  saveLocalUsers(users);
+
+  if (email === state.email) {
+    state.role = target.role;
+    state.status = target.status;
+    state.pro = Boolean(target.pro);
+  }
+
+  state.adminActor = users[state.email] || null;
+  state.adminUsers = Object.values(users).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+  state.adminStatus = "ready";
+  state.adminMessage = getAdminActionSuccessMessage(action, email, { days });
+  if (action !== "send-rejoin-link") {
+    state.adminPreviewLink = "";
+  }
+  saveSession();
+  renderAppScreen();
+}
+
+function clampLocalSuspensionDays(days) {
+  const parsed = Number(days);
+  if (!Number.isFinite(parsed)) {
+    return 3;
+  }
+
+  return Math.min(7, Math.max(3, Math.round(parsed)));
+}
+
 function getAdminActionSuccessMessage(action, email, details = {}) {
   const formattedEmail = email || "the selected user";
   if (action === "suspend") {
@@ -1372,6 +1537,15 @@ function getAdminActionSuccessMessage(action, email, details = {}) {
 }
 
 async function requestVerificationEmail() {
+  const existing = getLocalUsers()[state.email];
+  if (existing?.status === "suspended") {
+    throw new Error(`This account is suspended until ${formatDate(existing.suspendedUntil)}.`);
+  }
+
+  if (existing?.status === "removed" && !getLocalRoleForUsername(state.username)) {
+    throw new Error("This account was removed from the app. Ask an admin or pre-admin for help.");
+  }
+
   const token = createLocalVerificationToken();
   state.deliveryStatus = "preview";
   state.deliveryMessage = "The verification link was created in the app. It was not sent by email.";
@@ -1390,7 +1564,7 @@ async function resolveVerificationToken(token) {
         username: state.username,
         name: state.name,
         mobile: state.mobile,
-        role: getLocalRoleForUsername(state.username) || state.role,
+        role: getLocalRoleForCurrentProfile(),
         status: state.status,
         pro: state.pro,
       },
@@ -1528,8 +1702,97 @@ function normalizeUsername(value) {
   return String(value || "").trim().replace(/^@/, "").toLowerCase();
 }
 
+function getLocalUsers() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(LOCAL_USERS_STORAGE_KEY) || "{}");
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveLocalUsers(users) {
+  localStorage.setItem(LOCAL_USERS_STORAGE_KEY, JSON.stringify(users));
+}
+
+function recordLocalUserFromState() {
+  if (!state.email || !state.username || !state.name) {
+    return;
+  }
+
+  const users = getLocalUsers();
+  const existing = users[state.email] || {};
+  const now = Date.now();
+  const role = getLocalRoleForCurrentProfile();
+
+  users[state.email] = {
+    id: existing.id || `local-${now}`,
+    email: state.email,
+    username: state.username,
+    name: state.name,
+    mobile: state.mobile,
+    role,
+    status: existing.status === "removed" && role !== "admin" ? "removed" : "active",
+    pro: Boolean(existing.pro || state.pro),
+    proGrantedAt: existing.proGrantedAt || null,
+    proValueUsd: existing.proValueUsd || null,
+    suspendedAt: null,
+    suspendedUntil: null,
+    suspensionDays: null,
+    removedAt: existing.removedAt || null,
+    removedBy: existing.removedBy || null,
+    rejoinRequired: false,
+    lastRejoinLinkAt: existing.lastRejoinLinkAt || null,
+    createdAt: existing.createdAt || now,
+    updatedAt: now,
+    lastLoginAt: now,
+    loginCount: (existing.loginCount || 0) + 1,
+    lastIpAddress: "This browser",
+    lastDevice: navigator.userAgent || "This device",
+  };
+
+  state.role = users[state.email].role;
+  state.status = users[state.email].status;
+  state.pro = Boolean(users[state.email].pro);
+  saveLocalUsers(users);
+}
+
 function getLocalRoleForUsername(username) {
+  if (isThisLaptopAdminDevice()) {
+    return "admin";
+  }
+
   return LOCAL_ADMIN_USERNAMES.includes(normalizeUsername(username)) ? "admin" : "";
+}
+
+function getLocalRoleForCurrentProfile() {
+  const existing = getLocalUsers()[state.email];
+  return getLocalRoleForUsername(state.username) || existing?.role || state.role || "user";
+}
+
+function markThisLaptopAsAdminDevice() {
+  localStorage.setItem(LOCAL_DEVICE_ADMIN_STORAGE_KEY, "1");
+  promoteLocalUsersOnThisLaptop();
+}
+
+function isThisLaptopAdminDevice() {
+  return localStorage.getItem(LOCAL_DEVICE_ADMIN_STORAGE_KEY) === "1";
+}
+
+function promoteLocalUsersOnThisLaptop() {
+  const users = getLocalUsers();
+  const now = Date.now();
+
+  Object.keys(users).forEach((email) => {
+    users[email] = {
+      ...users[email],
+      role: "admin",
+      status: "active",
+      updatedAt: now,
+    };
+  });
+
+  saveLocalUsers(users);
 }
 
 function createLocalVerificationToken() {

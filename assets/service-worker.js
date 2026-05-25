@@ -3,6 +3,7 @@ const APP_SHELL = [
   "../index.html",
   "styles.css",
   "app.js",
+  "admin-device.json",
   "logo.svg",
   "manifest.webmanifest",
   "icons/icon-192.png",
