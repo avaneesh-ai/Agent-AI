@@ -1286,6 +1286,8 @@ function renderAdminPanel() {
   const isPreAdminTab = state.activeAppTab === "pre-admin";
   const tabTitle = isPreAdminTab ? "Pre-Admin" : "Admin";
   const createLinkForm = state.role === "admin" ? renderAdminVerificationForm() : "";
+  const sharedUserCount = state.adminUsers.filter((user) => !user.localOnly).length;
+  const localOnlyUserCount = state.adminUsers.length - sharedUserCount;
   const message = state.adminMessage
     ? `<div class="admin-message">
         <span>${escapeHtml(state.adminMessage)}</span>
@@ -1321,14 +1323,25 @@ function renderAdminPanel() {
       <div class="admin-heading">
         <div>
           <h2>${tabTitle}</h2>
-          <p>Registered users from Firebase and old users saved in this browser appear here.</p>
+          <p>Registered users from the shared database and old users saved in this browser appear here.</p>
         </div>
         <button class="button secondary admin-refresh" type="button" id="admin-refresh">Refresh</button>
       </div>
       <div class="admin-meta">
         <span>Your role: ${escapeHtml(formatRole(state.role))}</span>
+        <span>${state.sessionToken ? "Shared server connected" : "Shared server not connected"}</span>
+        <span>Total shown: ${state.adminUsers.length}</span>
+        <span>Shared database: ${sharedUserCount}</span>
+        ${localOnlyUserCount ? `<span>This browser only: ${localOnlyUserCount}</span>` : ""}
         <span>Free Pro value: $25</span>
       </div>
+      ${
+        !state.sessionToken
+          ? `<div class="admin-message warning-admin-message">
+              <span>This Admin tab is local-only right now. Users from another phone, tab, laptop, desktop, or Wi-Fi will show only after this app is running with the shared server/database and this admin logs in through it.</span>
+            </div>`
+          : ""
+      }
       ${createLinkForm}
       ${message}
       <div class="admin-users">
@@ -1395,7 +1408,13 @@ function renderAdminVerificationFormSection({ role, title, button }) {
 
 function renderAdminUserCard(user) {
   const statusClass =
-    user.status === "suspended" ? "is-suspended" : user.status === "removed" ? "is-removed" : "";
+    user.status === "suspended"
+      ? "is-suspended"
+      : user.status === "removed"
+        ? "is-removed"
+        : user.status === "pending"
+          ? "is-pending"
+          : "";
 
   return `
     <article class="admin-user-card">
@@ -1438,13 +1457,28 @@ function renderAdminUserCard(user) {
           <span>Registered</span>
           <strong>${escapeHtml(formatDate(user.createdAt))}</strong>
         </div>
+        <div class="profile-row">
+          <span>Latest registration</span>
+          <strong>${escapeHtml(formatDate(user.lastRegistrationAt || user.createdAt))}</strong>
+        </div>
+        <div class="profile-row">
+          <span>Last login</span>
+          <strong>${escapeHtml(formatDate(user.lastLoginAt))}</strong>
+        </div>
+        <div class="profile-row">
+          <span>Login count</span>
+          <strong>${escapeHtml(user.loginCount || 0)}</strong>
+        </div>
         ${
           user.localOnly
             ? `<div class="profile-row">
                 <span>Saved in</span>
                 <strong>This browser only</strong>
               </div>`
-            : ""
+            : `<div class="profile-row">
+                <span>Saved in</span>
+                <strong>Shared database</strong>
+              </div>`
         }
       </div>
 
@@ -2702,7 +2736,8 @@ function loadLocalAdminUsers() {
   state.adminActor = actor;
   state.adminUsers = mergeAdminUsersWithLocal([]);
   state.adminStatus = "ready";
-  state.adminMessage = "Showing old users saved in this browser.";
+  state.adminMessage =
+    "Showing only old users saved in this browser. To see users from phones, tablets, other laptops, or different Wi-Fi, open the app through the shared server/database.";
   state.adminPreviewLink = "";
 
   if (actor) {
@@ -2927,12 +2962,70 @@ async function requestVerificationEmail() {
 
   recordLocalUserFromState({ status: "pending" });
 
+  try {
+    const result = await requestServerVerificationLink();
+    const sharedLink = result.previewLink || result.verificationLink;
+    if (!sharedLink) {
+      throw new Error("The shared server did not return a verification link.");
+    }
+
+    state.deliveryStatus = result.sent ? "sent" : "preview";
+    state.deliveryMessage =
+      result.message ||
+      "Registration saved in the shared database. Admin can see this user from any device.";
+    state.verificationLink = sharedLink;
+    state.token = "";
+    saveSession();
+    return;
+  } catch (error) {
+    const canFallBackToLocal =
+      error?.localFallback ||
+      isNetworkError(error) ||
+      String(error?.message || "").includes("shared server did not return");
+
+    if (!canFallBackToLocal) {
+      throw error;
+    }
+  }
+
   const token = createLocalVerificationToken();
   state.deliveryStatus = "preview";
-  state.deliveryMessage = "The verification link was created in the app. It was not sent by email.";
+  state.deliveryMessage =
+    "Local verification link created. This works only in this browser, so users from another phone or Wi-Fi will not appear in Admin until the shared server/database is used.";
   state.verificationLink = `${window.location.href.split("#")[0]}#verify/${token}`;
   state.token = token;
   saveSession();
+}
+
+async function requestServerVerificationLink() {
+  const response = await fetch("/api/send-verification-link", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      email: state.email,
+      username: state.username,
+      name: state.name,
+      mobile: state.mobile,
+      password: pendingPassword,
+      rejoinToken: state.rejoinToken,
+      previewOnly: true,
+    }),
+  });
+  const data = await readJsonResponse(response);
+
+  if (!response.ok && (response.status === 404 || response.status === 405)) {
+    const error = new Error("The shared server is not available.");
+    error.localFallback = true;
+    throw error;
+  }
+
+  if (!response.ok) {
+    throw new Error(data.message || "The shared verification link could not be created.");
+  }
+
+  return data;
 }
 
 async function resolveVerificationToken(token) {

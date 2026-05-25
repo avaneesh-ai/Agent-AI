@@ -1283,6 +1283,18 @@ body[data-theme="dark"] .admin-message {
   font-weight: 800;
 }
 
+.warning-admin-message {
+  color: #5f3b00;
+  background: #fff8e8;
+  border-color: rgba(193, 127, 22, 0.36);
+}
+
+body[data-theme="dark"] .warning-admin-message {
+  color: #ffe6a3;
+  background: #322714;
+  border-color: rgba(240, 184, 74, 0.42);
+}
+
 .admin-link-sections {
   display: grid;
   gap: 12px;
