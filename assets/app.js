@@ -2,6 +2,7 @@ const root = document.querySelector("#screen-root");
 const progressDots = [...document.querySelectorAll(".step-dot")];
 const themeToggle = document.querySelector("#theme-toggle");
 const THEME_STORAGE_KEY = "secure-entry-theme";
+const LOCAL_ADMIN_USERNAMES = ["avaneesh"];
 let sessionValidationInFlight = false;
 let deferredInstallPrompt = null;
 let installMessage = "";
@@ -1389,7 +1390,7 @@ async function resolveVerificationToken(token) {
         username: state.username,
         name: state.name,
         mobile: state.mobile,
-        role: state.role,
+        role: getLocalRoleForUsername(state.username) || state.role,
         status: state.status,
         pro: state.pro,
       },
@@ -1525,6 +1526,10 @@ function shortenDevice(device) {
 
 function normalizeUsername(value) {
   return String(value || "").trim().replace(/^@/, "").toLowerCase();
+}
+
+function getLocalRoleForUsername(username) {
+  return LOCAL_ADMIN_USERNAMES.includes(normalizeUsername(username)) ? "admin" : "";
 }
 
 function createLocalVerificationToken() {
