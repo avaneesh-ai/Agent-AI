@@ -1218,9 +1218,65 @@ function renderAdminActionButton(user, action, label) {
   const disabledReason = getDisabledAdminActionReason(user, action);
   const priceLabel = action === "give-free-pro" ? `${label} ($25)` : label;
   return `
-    <button class="button ${action === "remove" ? "danger" : "secondary"}" type="button" data-admin-action="${action}" data-email="${escapeHtml(user.email)}" ${disabledReason ? "disabled" : ""} title="${escapeHtml(disabledReason || priceLabel)}">
-      ${escapeHtml(priceLabel)}
+    <button class="admin-icon-button ${action === "remove" ? "danger" : ""}" type="button" data-admin-action="${action}" data-email="${escapeHtml(user.email)}" ${disabledReason ? "disabled" : ""} title="${escapeHtml(disabledReason || priceLabel)}" aria-label="${escapeHtml(priceLabel)}">
+      ${renderAdminActionIcon(action)}
+      <span>${escapeHtml(priceLabel)}</span>
     </button>
+  `;
+}
+
+function renderAdminActionIcon(action) {
+  const icons = {
+    suspend: `
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M10 4h4" />
+        <path d="M12 4v8" />
+        <path d="M8 8.5A6 6 0 1 0 16 8.5" />
+        <path d="M9.4 16.6 14.6 11.4" />
+      </svg>
+    `,
+    remove: `
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M4 7h16" />
+        <path d="M10 11v6" />
+        <path d="M14 11v6" />
+        <path d="M6 7l1 13h10l1-13" />
+        <path d="M9 7V4h6v3" />
+      </svg>
+    `,
+    "make-pre-admin": `
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M12 3.5 5.5 6v5.2c0 4 2.6 7.5 6.5 9.3 3.9-1.8 6.5-5.3 6.5-9.3V6L12 3.5Z" />
+        <path d="M9 12h6" />
+        <path d="M12 9v6" />
+      </svg>
+    `,
+    "make-admin": `
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M12 3.5 5.5 6v5.2c0 4 2.6 7.5 6.5 9.3 3.9-1.8 6.5-5.3 6.5-9.3V6L12 3.5Z" />
+        <path d="m8.8 12.4 2.1 2.1 4.5-5" />
+      </svg>
+    `,
+    "send-rejoin-link": `
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M4 6.8h16v10.4H4z" />
+        <path d="m4.8 7.6 7.2 5.1 7.2-5.1" />
+        <path d="M8 19.5h8" />
+      </svg>
+    `,
+    "give-free-pro": `
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M12 3.5 14.6 9l6 .9-4.3 4.2 1 5.9L12 17.1 6.7 20l1-5.9L3.4 9.9l6-.9L12 3.5Z" />
+        <path d="M12 8.5v5" />
+      </svg>
+    `,
+  };
+
+  return icons[action] || `
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M12 5v14" />
+      <path d="M5 12h14" />
+    </svg>
   `;
 }
 

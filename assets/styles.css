@@ -1103,10 +1103,67 @@ body[data-theme="dark"] .status-pill.is-removed {
   background: #8f1c13;
 }
 
-.admin-actions .button {
-  min-height: 40px;
+.admin-icon-button {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
   padding: 0 12px;
+  color: var(--ink);
   font-size: 0.88rem;
+  font-weight: 800;
+  background: #e8edf3;
+  border: 1px solid #d7dee9;
+  border-radius: 8px;
+  cursor: pointer;
+  transition:
+    background 160ms ease,
+    border-color 160ms ease,
+    transform 160ms ease;
+}
+
+.admin-icon-button:hover {
+  background: #d9e1eb;
+  transform: translateY(-1px);
+}
+
+.admin-icon-button.danger {
+  color: #fff;
+  background: #b42318;
+  border-color: #b42318;
+}
+
+.admin-icon-button.danger:hover {
+  background: #8f1c13;
+  border-color: #8f1c13;
+}
+
+.admin-icon-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+  transform: none;
+}
+
+.admin-icon-button svg {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2;
+  pointer-events: none;
+}
+
+body[data-theme="dark"] .admin-icon-button {
+  background: #223047;
+  border-color: #30445f;
+}
+
+body[data-theme="dark"] .admin-icon-button:hover {
+  background: #2b3b56;
 }
 
 .sr-only {
@@ -1217,6 +1274,10 @@ body[data-theme="dark"] .profile-row {
 
   .admin-actions {
     flex-direction: column;
+  }
+
+  .admin-icon-button {
+    width: 100%;
   }
 
   .suspend-control {
