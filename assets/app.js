@@ -279,7 +279,7 @@ function renderProfileScreen() {
     <section class="screen">
       <p class="screen-kicker">Step 2</p>
       <h1>Add your profile details</h1>
-      <p class="screen-copy">Fill in your username, name, and mobile number. When you click next, the app will send a verification link to your registered email ID: ${escapeHtml(state.email)}.</p>
+      <p class="screen-copy">Fill in your username, name, and mobile number. When you click next, the app will create a verification link for this login.</p>
 
       <form class="form-stack" id="profile-form" novalidate>
         <div class="field">
@@ -372,7 +372,7 @@ function renderProfileScreen() {
     saveSession();
 
     submitButton.disabled = true;
-    submitButton.textContent = "Sending link...";
+    submitButton.textContent = "Creating link...";
 
     try {
       await requestVerificationEmail();
@@ -396,15 +396,11 @@ function renderSentScreen() {
   root.innerHTML = `
     <section class="screen">
       <p class="screen-kicker">Step 3</p>
-      <h1>Check your email</h1>
-      <p class="screen-copy">${
-        isPreview
-          ? `Email delivery preview is enabled for your registered email ID: ${escapeHtml(state.email)}.`
-          : `The verification link has been sent to your registered email ID: ${escapeHtml(state.email)}.`
-      }</p>
+      <h1>Open your verification link</h1>
+      <p class="screen-copy">Your verification link is ready for ${escapeHtml(state.email)}. It has not been sent by email.</p>
 
       <div class="notice ${isPreview ? "warning-notice" : ""}">
-        <strong>${isPreview ? "Development preview" : "Link sent"}</strong>
+        <strong>Verification link ready</strong>
         <span>${escapeHtml(state.deliveryMessage || "Open the verification email and click the login link to continue.")}</span>
       </div>
 
@@ -413,7 +409,7 @@ function renderSentScreen() {
           ? `<div class="email-preview">
               <div class="email-preview-header">
                 <span>To: ${escapeHtml(state.email)}</span>
-                <span>Subject: Login confirmation link</span>
+                <span>Local login confirmation link</span>
               </div>
               <a class="link-box" href="${escapeHtml(state.verificationLink)}">${escapeHtml(state.verificationLink)}</a>
             </div>`
@@ -425,8 +421,8 @@ function renderSentScreen() {
 
       <div class="actions">
         <button class="button secondary" type="button" id="edit-profile">Edit details</button>
-        <button class="button" type="button" id="resend-link">Resend link</button>
-        ${isPreview ? `<a class="button warning" href="${escapeHtml(state.verificationLink)}">Open preview link</a>` : ""}
+        <button class="button" type="button" id="resend-link">Create link again</button>
+        ${isPreview ? `<a class="button warning" href="${escapeHtml(state.verificationLink)}">Open verification link</a>` : ""}
       </div>
     </section>
   `;
@@ -437,7 +433,7 @@ function renderSentScreen() {
     const resendError = document.querySelector("#resend-error");
     resendError.textContent = "";
     button.disabled = true;
-    button.textContent = "Sending...";
+    button.textContent = "Creating...";
 
     try {
       await requestVerificationEmail();
@@ -445,7 +441,7 @@ function renderSentScreen() {
     } catch (error) {
       resendError.textContent = error.message;
       button.disabled = false;
-      button.textContent = "Resend link";
+      button.textContent = "Create link again";
     }
   });
 }
@@ -476,7 +472,7 @@ async function renderConfirmScreen(token) {
       <p class="screen-copy">
         ${
           isValidToken
-            ? `The login link was sent to ${escapeHtml(email)}. Click okay to enter the app.`
+            ? `The login link was created for ${escapeHtml(email)}. Click okay to enter the app.`
             : "Please start again so the app can create a fresh login link."
         }
       </p>
@@ -1375,45 +1371,31 @@ function getAdminActionSuccessMessage(action, email, details = {}) {
 }
 
 async function requestVerificationEmail() {
-  let response;
-  try {
-    response = await fetch("/api/send-verification-link", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        email: state.email,
-        username: state.username,
-        name: state.name,
-        mobile: state.mobile,
-        rejoinToken: state.rejoinToken,
-      }),
-    });
-  } catch {
-    throw new Error(
-      "Email delivery requires the app server. Start the app with npm start after adding SMTP settings.",
-    );
-  }
-
-  const data = await readJsonResponse(response);
-
-  if (!response.ok) {
-    throw new Error(
-      data.message ||
-        "The app could not send the verification email. Please check the email server settings.",
-    );
-  }
-
-  state.deliveryStatus = data.sent ? "sent" : "preview";
-  state.deliveryMessage =
-    data.message || `The verification link has been sent to ${state.email}.`;
-  state.verificationLink = data.previewLink || "";
-  state.token = data.token || "";
+  const token = createLocalVerificationToken();
+  state.deliveryStatus = "preview";
+  state.deliveryMessage = "The verification link was created in the app. It was not sent by email.";
+  state.verificationLink = `${window.location.href.split("#")[0]}#verify/${token}`;
+  state.token = token;
   saveSession();
 }
 
 async function resolveVerificationToken(token) {
+  if (state.token && token === state.token) {
+    return {
+      valid: true,
+      source: "local",
+      profile: {
+        email: state.email,
+        username: state.username,
+        name: state.name,
+        mobile: state.mobile,
+        role: state.role,
+        status: state.status,
+        pro: state.pro,
+      },
+    };
+  }
+
   try {
     const response = await fetch(`/api/verification?token=${encodeURIComponent(token)}`);
     const data = await readJsonResponse(response);
@@ -1467,7 +1449,7 @@ function getAgentReply(message) {
   }
 
   if (text.includes("link") || text.includes("email") || text.includes("verify")) {
-    return `The app sends a one-time verification link to your registered email ID, ${state.email}. After that link opens, clicking Okay approves this session.`;
+    return `The app creates a one-time verification link for ${state.email}. After that link opens, clicking Okay approves this session.`;
   }
 
   if (text.includes("security") || text.includes("safe") || text.includes("password")) {
@@ -1543,6 +1525,16 @@ function shortenDevice(device) {
 
 function normalizeUsername(value) {
   return String(value || "").trim().replace(/^@/, "").toLowerCase();
+}
+
+function createLocalVerificationToken() {
+  const bytes = new Uint8Array(24);
+  if (window.crypto?.getRandomValues) {
+    window.crypto.getRandomValues(bytes);
+    return [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  }
+
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 }
 
 function safeDomId(value) {
