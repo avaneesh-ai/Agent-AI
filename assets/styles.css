@@ -1371,6 +1371,11 @@ body[data-theme="dark"] .admin-message {
   background: #fff0d9;
 }
 
+.status-pill.is-pending {
+  color: #5f3b00;
+  background: #ffefc2;
+}
+
 body[data-theme="dark"] .status-pill {
   color: #c9f7e4;
   background: #173a33;
@@ -1382,6 +1387,11 @@ body[data-theme="dark"] .status-pill.is-suspended {
 }
 
 body[data-theme="dark"] .status-pill.is-removed {
+  color: #ffe6a3;
+  background: #4a3819;
+}
+
+body[data-theme="dark"] .status-pill.is-pending {
   color: #ffe6a3;
   background: #4a3819;
 }
