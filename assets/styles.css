@@ -750,6 +750,7 @@ body[data-theme="dark"] .agent-messages {
   max-width: min(88%, 24rem);
   padding: 10px 12px;
   overflow-wrap: anywhere;
+  white-space: pre-wrap;
   color: #243346;
   line-height: 1.45;
   background: #fff;
@@ -779,6 +780,12 @@ body[data-theme="dark"] .agent-message span {
   gap: 8px;
 }
 
+.agent-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .agent-chip {
   min-height: 36px;
   padding: 0 12px;
@@ -803,6 +810,45 @@ body[data-theme="dark"] .agent-chip {
 
 body[data-theme="dark"] .agent-chip:hover {
   background: #173a33;
+}
+
+.agent-chip:disabled {
+  cursor: not-allowed;
+  opacity: 0.68;
+}
+
+.voice-chip {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.voice-chip svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2;
+}
+
+.voice-chip.is-active {
+  color: #fff;
+  background: var(--blue);
+  border-color: var(--blue);
+}
+
+.voice-chip.is-locked {
+  color: #5f3b00;
+  background: #ffefc2;
+  border-color: rgba(193, 127, 22, 0.34);
+}
+
+body[data-theme="dark"] .voice-chip.is-locked {
+  color: #ffe6a3;
+  background: #4a3819;
+  border-color: rgba(240, 184, 74, 0.42);
 }
 
 .agent-form {
@@ -928,6 +974,41 @@ body[data-theme="dark"] .admin-message {
   overflow-wrap: anywhere;
   color: var(--blue);
   font-weight: 800;
+}
+
+.admin-link-form {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  background: var(--soft);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.admin-link-form h3 {
+  margin: 0;
+  font-size: 1rem;
+  letter-spacing: 0;
+}
+
+.admin-link-fields {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.admin-link-fields label {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 0.84rem;
+  font-weight: 750;
+}
+
+.compact-actions {
+  margin-top: 0;
+  padding-top: 0;
 }
 
 .admin-users {
@@ -1092,6 +1173,10 @@ body[data-theme="dark"] .profile-row {
   .visual-panel {
     order: -1;
     min-height: 260px;
+  }
+
+  .admin-link-fields {
+    grid-template-columns: 1fr;
   }
 }
 

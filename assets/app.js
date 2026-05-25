@@ -9,6 +9,9 @@ const LOCAL_ADMIN_USERNAMES = ["avaneesh"];
 let sessionValidationInFlight = false;
 let deferredInstallPrompt = null;
 let installMessage = "";
+let pendingPassword = "";
+let voiceModeActive = false;
+let voiceRecognition = null;
 
 const state = {
   email: "",
@@ -82,6 +85,10 @@ function getRoute() {
     return { name: "device-admin-setup" };
   }
 
+  if (hash.startsWith("admin-verify/")) {
+    return { name: "admin-verify", token: hash.split("/")[1] };
+  }
+
   if (hash.startsWith("verify/")) {
     return { name: "confirm", token: hash.split("/")[1] };
   }
@@ -136,7 +143,12 @@ function render() {
   const route = getRoute();
   updateProgress(route.name);
 
-  if (state.verified && route.name !== "app" && route.name !== "rejoin") {
+  if (
+    state.verified &&
+    route.name !== "app" &&
+    route.name !== "rejoin" &&
+    route.name !== "admin-verify"
+  ) {
     goTo("app");
     return;
   }
@@ -161,6 +173,11 @@ function render() {
     return;
   }
 
+  if (route.name === "admin-verify") {
+    renderAdminVerificationScreen(route.token);
+    return;
+  }
+
   if (route.name === "rejoin") {
     renderRejoinScreen(route.token);
     return;
@@ -180,6 +197,7 @@ function updateProgress(routeName) {
     profile: 1,
     sent: 2,
     confirm: 2,
+    "admin-verify": 2,
     app: 2,
   }[routeName] ?? 0;
 
@@ -201,7 +219,7 @@ function renderCredentialsScreen() {
     <section class="screen">
       <p class="screen-kicker">Step 1</p>
       <h1>Start with your login details</h1>
-      <p class="screen-copy">Enter your email ID and password first. After this, the app will ask for your personal details.</p>
+      <p class="screen-copy">Enter your email ID and password. Existing users can sign in directly, while new users can continue to profile details.</p>
       ${rejoinNotice}
 
       <form class="form-stack" id="credentials-form" novalidate>
@@ -218,22 +236,27 @@ function renderCredentialsScreen() {
         </div>
 
         <div class="actions">
-          <button class="button" type="submit">Next</button>
+          <button class="button secondary" type="submit" name="intent" value="signin">Sign in</button>
+          <button class="button" type="submit" name="intent" value="profile">Next</button>
         </div>
+        <p class="error" id="signin-error"></p>
       </form>
     </section>
   `;
 
-  document.querySelector("#credentials-form").addEventListener("submit", (event) => {
+  document.querySelector("#credentials-form").addEventListener("submit", async (event) => {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
-    const email = String(form.get("email")).trim();
+    const email = String(form.get("email")).trim().toLowerCase();
     const password = String(form.get("password"));
+    const intent = event.submitter?.value || "profile";
 
     const emailError = document.querySelector("#email-error");
     const passwordError = document.querySelector("#password-error");
+    const signInError = document.querySelector("#signin-error");
     emailError.textContent = "";
     passwordError.textContent = "";
+    signInError.textContent = "";
 
     let hasError = false;
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
@@ -276,8 +299,26 @@ function renderCredentialsScreen() {
     }
 
     state.email = email;
+    pendingPassword = password;
     state.verified = false;
     saveSession();
+
+    if (intent === "signin") {
+      const submitButton = event.submitter;
+      submitButton.disabled = true;
+      submitButton.textContent = "Signing in...";
+
+      try {
+        await signInExistingAccount({ email, password });
+        goTo("app");
+      } catch (error) {
+        signInError.textContent = error.message;
+        submitButton.disabled = false;
+        submitButton.textContent = "Sign in";
+      }
+      return;
+    }
+
     goTo("profile");
   });
 }
@@ -550,34 +591,12 @@ async function renderConfirmScreen(token) {
         const approval =
           verification.source === "server"
             ? await approveVerificationToken(token)
-            : { profile, sessionToken: state.sessionToken, user: profile };
-        const approvedProfile = approval.profile || profile;
-        const approvedUser = approval.user || approvedProfile;
-
-        state.email = approvedProfile.email || state.email;
-        state.username = approvedProfile.username || approvedUser.username || state.username;
-        state.name = approvedProfile.name || state.name;
-        state.mobile = approvedProfile.mobile || state.mobile;
-        state.role = approvedUser.role || approvedProfile.role || state.role || "user";
-        state.status = approvedUser.status || approvedProfile.status || "active";
-        state.pro = Boolean(approvedUser.pro || approvedProfile.pro);
-        state.sessionToken = approval.sessionToken || state.sessionToken;
+            : await approveLocalVerification(profile);
+        applyApprovedLogin(approval, profile);
         state.token = token;
-        state.verified = true;
-        state.deliveryStatus = "";
-        state.deliveryMessage = "";
-        state.verificationLink = "";
-        state.activeAppTab = "account";
-        state.adminUsers = [];
-        state.adminActor = null;
-        state.adminStatus = "idle";
-        state.adminMessage = "";
-        state.adminPreviewLink = "";
-        state.aiModels = [];
-        state.latestAiModel = null;
-        state.rejoinToken = "";
-        state.rejoinMessage = "";
         recordLocalUserFromState();
+        await rememberLocalPasswordForCurrentUser();
+        pendingPassword = "";
         saveSession();
         goTo("app");
       } catch (error) {
@@ -587,6 +606,86 @@ async function renderConfirmScreen(token) {
       }
     });
     document.querySelector("#cancel-login").addEventListener("click", () => goTo("sent"));
+    return;
+  }
+
+  document.querySelector("#restart-login").addEventListener("click", () => {
+    clearSession();
+    goTo("credentials");
+  });
+}
+
+async function renderAdminVerificationScreen(token) {
+  root.innerHTML = `
+    <section class="screen">
+      <p class="screen-kicker">Admin link</p>
+      <h1>Checking the verification link</h1>
+      <p class="screen-copy">Please wait while the app confirms this admin-created login link.</p>
+
+      <div class="confirm-card">
+        <h2>Checking link</h2>
+        <p>The app is checking whether this invite is still valid.</p>
+      </div>
+    </section>
+  `;
+
+  const verification = await resolveAdminVerificationToken(token);
+  const isValidToken = verification.valid;
+  const profile = verification.profile || {};
+
+  root.innerHTML = `
+    <section class="screen">
+      <p class="screen-kicker">Admin link</p>
+      <h1>${isValidToken ? "Do you want to login to this app?" : "This verification link is not valid"}</h1>
+      <p class="screen-copy">
+        ${
+          isValidToken
+            ? `This link was created for ${escapeHtml(profile.email || "this user")}. Click okay to enter the app.`
+            : "Ask an admin to create a fresh verification link."
+        }
+      </p>
+
+      <div class="confirm-card">
+        <h2>${isValidToken ? "Ready to continue" : "Link expired"}</h2>
+        <p>${
+          isValidToken
+            ? `${escapeHtml(profile.name || "The user")} will be logged in with the registered email ID and phone number on this link.`
+            : "For safety, admin-created links expire and cannot be reused."
+        }</p>
+      </div>
+
+      <div class="actions">
+        ${
+          isValidToken
+            ? `<button class="button warning" type="button" id="approve-admin-login">Okay</button>
+               <button class="button secondary" type="button" id="cancel-admin-login">Cancel</button>`
+            : `<button class="button" type="button" id="restart-login">Start again</button>`
+        }
+      </div>
+    </section>
+  `;
+
+  if (isValidToken) {
+    document.querySelector("#approve-admin-login").addEventListener("click", async (event) => {
+      const button = event.currentTarget;
+      button.disabled = true;
+      button.textContent = "Opening...";
+
+      try {
+        const approval = await approveAdminVerificationToken(token, profile, verification.source);
+        applyApprovedLogin(approval, profile);
+        state.token = token;
+        pendingPassword = "";
+        recordLocalUserFromState();
+        saveSession();
+        goTo("app");
+      } catch (error) {
+        button.disabled = false;
+        button.textContent = "Okay";
+        document.querySelector(".confirm-card p").textContent = error.message;
+      }
+    });
+    document.querySelector("#cancel-admin-login").addEventListener("click", () => goTo("credentials"));
     return;
   }
 
@@ -853,8 +952,8 @@ function renderAgentPanel() {
           </svg>
         </span>
         <div>
-          <h2>Secure Entry AI Agent</h2>
-          <p>Online for this account session.</p>
+          <h2>Secure Entry AI Chatbot</h2>
+          <p>Ask anything. Every prompt becomes a saved AI model blueprint.</p>
         </div>
       </div>
 
@@ -863,19 +962,49 @@ function renderAgentPanel() {
       </div>
 
       <div class="agent-quick-actions" aria-label="AI agent quick actions">
-        ${["Summarize my account", "Explain the email link", "Security checklist", "Draft welcome message"]
+        ${["Summarize my account", "Create a login support model", "Security checklist", "Draft welcome message"]
           .map((label) => `<button class="agent-chip" type="button" data-prompt="${escapeHtml(label)}">${escapeHtml(label)}</button>`)
           .join("")}
+      </div>
+
+      <div class="agent-tools">
+        ${renderVoiceModeControl()}
       </div>
 
       ${renderLatestAiModel()}
 
       <form class="agent-form" id="agent-form">
         <label class="sr-only" for="agent-input">Message the AI agent</label>
-        <input id="agent-input" name="message" type="text" autocomplete="off" placeholder="Ask the agent anything about your login" />
+        <input id="agent-input" name="message" type="text" autocomplete="off" placeholder="Message the AI chatbot" />
         <button class="button agent-send" type="submit">Send</button>
       </form>
     </div>
+  `;
+}
+
+function renderVoiceModeControl() {
+  if (!state.pro) {
+    return `
+      <button class="agent-chip voice-chip is-locked" type="button" disabled title="Voice mode is available only for Pro accounts">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M12 4a3 3 0 0 0-3 3v4a3 3 0 0 0 6 0V7a3 3 0 0 0-3-3Z" />
+          <path d="M5 11a7 7 0 0 0 14 0" />
+          <path d="M12 18v3" />
+        </svg>
+        <span>Voice mode Pro</span>
+      </button>
+    `;
+  }
+
+  return `
+    <button class="agent-chip voice-chip ${voiceModeActive ? "is-active" : ""}" type="button" id="voice-mode" aria-pressed="${voiceModeActive}">
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M12 4a3 3 0 0 0-3 3v4a3 3 0 0 0 6 0V7a3 3 0 0 0-3-3Z" />
+        <path d="M5 11a7 7 0 0 0 14 0" />
+        <path d="M12 18v3" />
+      </svg>
+      <span>${voiceModeActive ? "Listening" : "Voice mode"}</span>
+    </button>
   `;
 }
 
@@ -904,6 +1033,7 @@ function renderLatestAiModel() {
 function renderAdminPanel() {
   const isPreAdminTab = state.activeAppTab === "pre-admin";
   const tabTitle = isPreAdminTab ? "Pre-Admin" : "Admin";
+  const createLinkForm = state.role === "admin" ? renderAdminVerificationForm() : "";
   const message = state.adminMessage
     ? `<div class="admin-message">
         <span>${escapeHtml(state.adminMessage)}</span>
@@ -947,6 +1077,7 @@ function renderAdminPanel() {
         <span>Your role: ${escapeHtml(formatRole(state.role))}</span>
         <span>Free Pro value: $25</span>
       </div>
+      ${createLinkForm}
       ${message}
       <div class="admin-users">
         ${
@@ -956,6 +1087,31 @@ function renderAdminPanel() {
         }
       </div>
     </div>
+  `;
+}
+
+function renderAdminVerificationForm() {
+  return `
+    <form class="admin-link-form" id="admin-link-form" novalidate>
+      <h3>Create user verification link</h3>
+      <div class="admin-link-fields">
+        <label>
+          <span>Name</span>
+          <input name="name" type="text" autocomplete="off" placeholder="User name" required />
+        </label>
+        <label>
+          <span>Email ID</span>
+          <input name="email" type="email" autocomplete="off" placeholder="user@example.com" required />
+        </label>
+        <label>
+          <span>Phone number</span>
+          <input name="mobile" type="tel" autocomplete="off" placeholder="10 digit mobile number" required />
+        </label>
+      </div>
+      <div class="actions compact-actions">
+        <button class="button" type="submit">Create verification link</button>
+      </div>
+    </form>
   `;
 }
 
@@ -1133,6 +1289,35 @@ function setupAdminInteractions() {
     loadAdminUsers({ force: true });
   });
 
+  document.querySelector("#admin-link-form")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const name = String(form.get("name") || "").trim();
+    const email = String(form.get("email") || "").trim().toLowerCase();
+    const mobile = String(form.get("mobile") || "").trim();
+    const submitButton = event.currentTarget.querySelector("button[type='submit']");
+
+    submitButton.disabled = true;
+    submitButton.textContent = "Creating...";
+    state.adminMessage = "";
+    state.adminPreviewLink = "";
+    saveSession();
+
+    try {
+      const result = await createAdminVerificationLink({ name, email, mobile });
+      state.adminStatus = "ready";
+      state.adminMessage = result.message || `Verification link created for ${email}.`;
+      state.adminPreviewLink = result.verificationLink || "";
+    } catch (error) {
+      state.adminStatus = "ready";
+      state.adminMessage = error.message;
+      state.adminPreviewLink = "";
+    }
+
+    saveSession();
+    renderAppScreen();
+  });
+
   document.querySelectorAll("[data-admin-action]").forEach((button) => {
     button.addEventListener("click", async () => {
       const card = button.closest(".admin-user-card");
@@ -1237,42 +1422,195 @@ function setupAgentInteractions() {
     input.value = "";
   });
 
-  document.querySelectorAll(".agent-chip").forEach((button) => {
+  document.querySelectorAll(".agent-chip[data-prompt]").forEach((button) => {
     button.addEventListener("click", () => {
       sendAgentMessage(button.dataset.prompt);
     });
   });
+
+  document.querySelector("#voice-mode")?.addEventListener("click", handleVoiceModeClick);
 }
 
-async function sendAgentMessage(text) {
+async function sendAgentMessage(text, options = {}) {
   const message = String(text || "").trim();
   if (!message) {
     return;
   }
 
   state.agentMessages.push({ role: "user", text: message });
-  state.agentMessages.push({ role: "agent", text: "Executing your prompt and creating an AI model blueprint..." });
+  state.agentMessages.push({ role: "agent", text: "Thinking, executing your prompt, and saving an AI model..." });
   saveSession();
   renderAppScreen();
 
   try {
-    const result = await requestAiModel(message);
+    const result = await requestAgentChat(message);
     state.latestAiModel = result.model;
     state.aiModels = [result.model, ...state.aiModels].slice(0, 5);
+    const replyText = result.message;
     state.agentMessages[state.agentMessages.length - 1] = {
       role: "agent",
-      text: `${result.message} It can handle: ${result.model.capabilities.join(", ")}.`,
+      text: replyText,
     };
   } catch (error) {
+    const model = createLocalAiModel(message);
+    const replyText = `${getAgentReply(message)}\n\nSaved locally as ${model.name}.`;
+    state.latestAiModel = model;
+    state.aiModels = [model, ...state.aiModels].slice(0, 5);
     state.agentMessages[state.agentMessages.length - 1] = {
       role: "agent",
-      text: `${getAgentReply(message)} Model creation needs the app server session. ${error.message}`,
+      text: replyText,
     };
   }
 
   state.agentMessages = state.agentMessages.slice(-12);
+  const latestReply = state.agentMessages[state.agentMessages.length - 1]?.text || "";
   saveSession();
   renderAppScreen();
+
+  if (state.pro && (options.speakReply || voiceModeActive)) {
+    speakText(latestReply);
+  }
+}
+
+function handleVoiceModeClick() {
+  if (!state.pro) {
+    state.agentMessages.push({
+      role: "agent",
+      text: "Voice mode is only available for Pro accounts.",
+    });
+    saveSession();
+    renderAppScreen();
+    return;
+  }
+
+  if (voiceRecognition) {
+    voiceRecognition.stop();
+    voiceRecognition = null;
+    voiceModeActive = false;
+    saveSession();
+    renderAppScreen();
+    return;
+  }
+
+  const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!Recognition) {
+    const message =
+      "Voice input is not supported in this browser. Pro voice replies can still read the chatbot answer aloud when voice input is available.";
+    state.agentMessages.push({ role: "agent", text: message });
+    saveSession();
+    renderAppScreen();
+    speakText(message);
+    return;
+  }
+
+  const recognition = new Recognition();
+  let handledResult = false;
+  recognition.lang = "en-US";
+  recognition.interimResults = false;
+  recognition.maxAlternatives = 1;
+  voiceRecognition = recognition;
+  voiceModeActive = true;
+
+  state.agentMessages.push({ role: "agent", text: "Voice mode is listening..." });
+  state.agentMessages = state.agentMessages.slice(-12);
+  saveSession();
+  renderAppScreen();
+
+  recognition.addEventListener("result", (event) => {
+    handledResult = true;
+    const transcript = Array.from(event.results || [])
+      .map((result) => result[0]?.transcript || "")
+      .join(" ")
+      .trim();
+    voiceRecognition = null;
+    voiceModeActive = false;
+
+    if (!transcript) {
+      state.agentMessages.push({ role: "agent", text: "I could not hear a message. Try voice mode again." });
+      saveSession();
+      renderAppScreen();
+      return;
+    }
+
+    sendAgentMessage(transcript, { speakReply: true });
+  });
+
+  recognition.addEventListener("error", () => {
+    handledResult = true;
+    voiceRecognition = null;
+    voiceModeActive = false;
+    state.agentMessages.push({
+      role: "agent",
+      text: "Voice mode could not hear you clearly. Try again or type your prompt.",
+    });
+    saveSession();
+    renderAppScreen();
+  });
+
+  recognition.addEventListener("end", () => {
+    if (handledResult) {
+      return;
+    }
+
+    voiceRecognition = null;
+    voiceModeActive = false;
+    saveSession();
+    if (state.activeAppTab === "agent") {
+      renderAppScreen();
+    }
+  });
+
+  try {
+    recognition.start();
+  } catch {
+    voiceRecognition = null;
+    voiceModeActive = false;
+    state.agentMessages.push({
+      role: "agent",
+      text: "Voice mode could not start in this browser. Try typing your prompt instead.",
+    });
+    saveSession();
+    renderAppScreen();
+  }
+}
+
+function speakText(text) {
+  if (!state.pro || !("speechSynthesis" in window)) {
+    return;
+  }
+
+  const utterance = new SpeechSynthesisUtterance(
+    String(text || "")
+      .replace(/\s+/g, " ")
+      .slice(0, 700),
+  );
+  window.speechSynthesis.cancel();
+  window.speechSynthesis.speak(utterance);
+}
+
+async function requestAgentChat(prompt) {
+  if (!state.sessionToken) {
+    throw new Error("The server session is not available.");
+  }
+
+  const response = await fetch("/api/agent/chat", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${state.sessionToken}`,
+    },
+    body: JSON.stringify({
+      prompt,
+      history: state.agentMessages.slice(-8),
+    }),
+  });
+  const data = await readJsonResponse(response);
+
+  if (!response.ok) {
+    throw new Error(data.message || "The AI chatbot could not answer.");
+  }
+
+  return data;
 }
 
 async function requestAiModel(prompt) {
@@ -1291,6 +1629,72 @@ async function requestAiModel(prompt) {
   }
 
   return data;
+}
+
+function createLocalAiModel(prompt) {
+  const words = String(prompt)
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, " ")
+    .split(/\s+/)
+    .filter((word) => word.length > 2)
+    .slice(0, 6);
+  const topic = words.length ? titleCase(words.join(" ")) : "Custom Assistant";
+  const now = Date.now();
+  const model = {
+    id: `local-model-${now}`,
+    ownerEmail: state.email,
+    name: `${topic} Model`,
+    prompt,
+    objective: `Execute this user request: ${prompt}`,
+    inputs: ["user prompt", "current account context", "saved registration details"],
+    outputs: ["chatbot answer", "action summary", "saved model blueprint"],
+    capabilities: inferLocalModelCapabilities(prompt),
+    workflow: [
+      "Understand the prompt.",
+      "Check the current user context.",
+      "Answer in chat and save the model locally.",
+    ],
+    execution: {
+      provider: "local",
+      status: "completed",
+      result: getAgentReply(prompt),
+      executedAt: now,
+    },
+    status: "executed",
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  saveLocalAiModel(model);
+  return model;
+}
+
+function saveLocalAiModel(model) {
+  const models = JSON.parse(localStorage.getItem("secure-entry-local-ai-models") || "[]");
+  models.unshift(model);
+  localStorage.setItem("secure-entry-local-ai-models", JSON.stringify(models.slice(0, 20)));
+}
+
+function inferLocalModelCapabilities(prompt) {
+  const text = String(prompt).toLowerCase();
+  const capabilities = ["chatbot response", "prompt execution", "saved model blueprint"];
+  if (text.includes("admin") || text.includes("user") || text.includes("account")) {
+    capabilities.push("account-aware actions");
+  }
+  if (text.includes("login") || text.includes("verify")) {
+    capabilities.push("login guidance");
+  }
+  if (text.includes("pro") || text.includes("subscription")) {
+    capabilities.push("subscription workflow");
+  }
+  return capabilities;
+}
+
+function titleCase(value) {
+  return String(value)
+    .split(/\s+/)
+    .map((word) => `${word.charAt(0).toUpperCase()}${word.slice(1)}`)
+    .join(" ");
 }
 
 async function loadAdminUsers({ force = false } = {}) {
@@ -1537,7 +1941,7 @@ function getAdminActionSuccessMessage(action, email, details = {}) {
 }
 
 async function requestVerificationEmail() {
-  const existing = getLocalUsers()[state.email];
+  const existing = findLocalUserByEmail(state.email).user;
   if (existing?.status === "suspended") {
     throw new Error(`This account is suspended until ${formatDate(existing.suspendedUntil)}.`);
   }
@@ -1545,6 +1949,8 @@ async function requestVerificationEmail() {
   if (existing?.status === "removed" && !getLocalRoleForUsername(state.username)) {
     throw new Error("This account was removed from the app. Ask an admin or pre-admin for help.");
   }
+
+  recordLocalUserFromState({ status: "pending" });
 
   const token = createLocalVerificationToken();
   state.deliveryStatus = "preview";
@@ -1605,6 +2011,336 @@ async function approveVerificationToken(token) {
   }
 
   return data;
+}
+
+async function approveLocalVerification(profile) {
+  try {
+    const response = await fetch("/api/local-login", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        email: profile.email || state.email,
+        username: profile.username || state.username,
+        name: profile.name || state.name,
+        mobile: profile.mobile || state.mobile,
+        password: pendingPassword,
+      }),
+    });
+    const data = await readJsonResponse(response);
+
+    if (!response.ok && (response.status === 404 || response.status === 405)) {
+      return { profile, sessionToken: "", user: profile };
+    }
+
+    if (!response.ok) {
+      throw new Error(data.message || "The app server could not save this login.");
+    }
+
+    return data;
+  } catch (error) {
+    if (!isNetworkError(error)) {
+      throw error;
+    }
+
+    return { profile, sessionToken: "", user: profile };
+  }
+}
+
+function applyApprovedLogin(approval, fallbackProfile = {}) {
+  const approvedProfile = approval.profile || fallbackProfile;
+  const approvedUser = approval.user || approvedProfile;
+  const username = approvedProfile.username || approvedUser.username || state.username;
+
+  state.email = (approvedProfile.email || approvedUser.email || state.email).toLowerCase();
+  state.username = username;
+  state.name = approvedProfile.name || approvedUser.name || state.name;
+  state.mobile = approvedProfile.mobile || approvedUser.mobile || state.mobile;
+  state.role =
+    approvedUser.role ||
+    approvedProfile.role ||
+    getLocalRoleForUsername(username) ||
+    state.role ||
+    "user";
+  state.status = approvedUser.status || approvedProfile.status || "active";
+  state.pro = Boolean(approvedUser.pro || approvedProfile.pro);
+  state.sessionToken = approval.sessionToken || "";
+  state.verified = true;
+  state.deliveryStatus = "";
+  state.deliveryMessage = "";
+  state.verificationLink = "";
+  state.activeAppTab = "account";
+  state.agentMessages = [];
+  state.adminUsers = [];
+  state.adminActor = null;
+  state.adminStatus = "idle";
+  state.adminMessage = "";
+  state.adminPreviewLink = "";
+  state.aiModels = [];
+  state.latestAiModel = null;
+  state.rejoinToken = "";
+  state.rejoinMessage = "";
+}
+
+async function signInExistingAccount({ email, password }) {
+  const normalizedEmail = String(email || "").trim().toLowerCase();
+  let serverMessage = "";
+
+  try {
+    const response = await fetch("/api/password-login", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ email: normalizedEmail, password }),
+    });
+    const data = await readJsonResponse(response);
+
+    if (response.ok && data.profile) {
+      applyApprovedLogin(data, data.profile);
+      pendingPassword = password;
+      recordLocalUserFromState();
+      await rememberLocalPasswordForCurrentUser();
+      pendingPassword = "";
+      saveSession();
+      return;
+    }
+
+    serverMessage = data.message || "No saved account was found for this email ID.";
+    if (response.status !== 404 && response.status !== 405) {
+      throw new Error(serverMessage);
+    }
+  } catch (error) {
+    if (!isNetworkError(error)) {
+      throw error;
+    }
+  }
+
+  await signInLocalSavedAccount({
+    email: normalizedEmail,
+    password,
+    serverMessage,
+  });
+}
+
+async function signInLocalSavedAccount({ email, password, serverMessage }) {
+  const found = findLocalUserByEmail(email);
+  const user = found.user;
+
+  if (!user) {
+    throw new Error(serverMessage || "No saved account was found for this email ID.");
+  }
+
+  if (normalizeLocalUserStatus(user)) {
+    found.users[found.email] = user;
+    saveLocalUsers(found.users);
+  }
+
+  if (user.status === "suspended") {
+    throw new Error(`This account is suspended until ${formatDate(user.suspendedUntil)}.`);
+  }
+
+  if (user.status === "removed") {
+    throw new Error("This account was removed from the app. Ask an admin or pre-admin for a rejoin link.");
+  }
+
+  if (!user.passwordHash) {
+    throw new Error("This account needs one full login once before password-only sign in works.");
+  }
+
+  const passwordMatches = await verifyLocalPassword(password, user.passwordHash);
+  if (!passwordMatches) {
+    throw new Error("The password does not match this account.");
+  }
+
+  const now = Date.now();
+  user.lastLoginAt = now;
+  user.loginCount = (user.loginCount || 0) + 1;
+  user.updatedAt = now;
+  user.lastIpAddress = "This browser";
+  user.lastDevice = navigator.userAgent || "This device";
+  found.users[found.email] = user;
+  saveLocalUsers(found.users);
+
+  applyApprovedLogin({ profile: user, user, sessionToken: "" }, user);
+  pendingPassword = "";
+  saveSession();
+}
+
+async function createAdminVerificationLink({ name, email, mobile }) {
+  const normalizedEmail = String(email || "").trim().toLowerCase();
+  const username = deriveUsernameFromEmail(normalizedEmail, name);
+
+  if (state.role !== "admin") {
+    throw new Error("Only admins can create verification links.");
+  }
+
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
+    throw new Error("Enter a valid email ID.");
+  }
+
+  if (!/^[a-z0-9._-]{3,24}$/.test(username)) {
+    throw new Error("The generated username is not valid. Try a different email ID.");
+  }
+
+  if (name.length < 2) {
+    throw new Error("Enter the user's name.");
+  }
+
+  if (!/^[0-9+\-\s()]{7,16}$/.test(mobile)) {
+    throw new Error("Enter a valid phone number.");
+  }
+
+  if (state.sessionToken) {
+    try {
+      const response = await fetch("/api/admin/create-verification-link", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${state.sessionToken}`,
+        },
+        body: JSON.stringify({
+          name,
+          email: normalizedEmail,
+          mobile,
+          username,
+        }),
+      });
+      const data = await readJsonResponse(response);
+
+      if (response.ok && data.verificationLink) {
+        return data;
+      }
+
+      if (response.status !== 404 && response.status !== 405) {
+        throw new Error(data.message || "The verification link could not be created.");
+      }
+    } catch (error) {
+      if (!isNetworkError(error)) {
+        throw error;
+      }
+    }
+  }
+
+  return createLocalAdminVerificationLink({
+    name,
+    email: normalizedEmail,
+    mobile,
+    username,
+  });
+}
+
+function createLocalAdminVerificationLink(profile) {
+  const token = `local-${base64UrlEncodeJson({
+    ...profile,
+    createdAt: Date.now(),
+    expiresAt: Date.now() + 7 * 24 * 60 * 60 * 1000,
+  })}`;
+
+  return {
+    verificationLink: `${window.location.href.split("#")[0]}#admin-verify/${token}`,
+    message: `Verification link created locally for ${profile.email}.`,
+  };
+}
+
+async function resolveAdminVerificationToken(token) {
+  if (String(token || "").startsWith("local-")) {
+    const profile = base64UrlDecodeJson(String(token).slice(6));
+    if (!profile || Number(profile.expiresAt) <= Date.now()) {
+      return { valid: false };
+    }
+
+    return {
+      valid: true,
+      source: "local",
+      profile,
+    };
+  }
+
+  try {
+    const response = await fetch(`/api/admin-verification?token=${encodeURIComponent(token || "")}`);
+    const data = await readJsonResponse(response);
+
+    if (!response.ok || !data.valid) {
+      return { valid: false };
+    }
+
+    return {
+      valid: true,
+      source: "server",
+      profile: data.profile,
+    };
+  } catch {
+    return { valid: false };
+  }
+}
+
+async function approveAdminVerificationToken(token, profile, source) {
+  if (source === "local" || String(token || "").startsWith("local-")) {
+    return approveLocalAdminVerification(profile);
+  }
+
+  const response = await fetch("/api/approve-admin-verification", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ token }),
+  });
+  const data = await readJsonResponse(response);
+
+  if (!response.ok || !data.profile) {
+    throw new Error(data.message || "This admin-created verification link could not be approved.");
+  }
+
+  return data;
+}
+
+function approveLocalAdminVerification(profile) {
+  const found = findLocalUserByEmail(profile.email);
+  const existing = found.user || {};
+  normalizeLocalUserStatus(existing);
+
+  if (existing.status === "suspended") {
+    throw new Error(`This account is suspended until ${formatDate(existing.suspendedUntil)}.`);
+  }
+
+  if (existing.status === "removed") {
+    throw new Error("This account was removed from the app. Ask an admin or pre-admin for a rejoin link.");
+  }
+
+  const now = Date.now();
+  const email = String(profile.email || "").trim().toLowerCase();
+  const username = normalizeUsername(profile.username || deriveUsernameFromEmail(email, profile.name));
+  const role = getLocalRoleForUsername(username) || existing.role || "user";
+  const user = {
+    ...existing,
+    id: existing.id || `local-${now}`,
+    email,
+    username,
+    name: profile.name,
+    mobile: profile.mobile,
+    role,
+    status: "active",
+    pro: Boolean(existing.pro),
+    createdAt: existing.createdAt || now,
+    updatedAt: now,
+    lastLoginAt: now,
+    loginCount: (existing.loginCount || 0) + 1,
+    lastIpAddress: "This browser",
+    lastDevice: navigator.userAgent || "This device",
+  };
+
+  const users = found.users || getLocalUsers();
+  users[email] = user;
+  saveLocalUsers(users);
+
+  return {
+    profile: user,
+    user,
+    sessionToken: "",
+  };
 }
 
 async function readJsonResponse(response) {
@@ -1702,6 +2438,52 @@ function normalizeUsername(value) {
   return String(value || "").trim().replace(/^@/, "").toLowerCase();
 }
 
+function deriveUsernameFromEmail(email, fallbackName = "") {
+  const fromEmail = String(email || "").split("@")[0];
+  const fallback = String(fallbackName || "").replace(/\s+/g, ".");
+  return normalizeUsername(fromEmail || fallback).replace(/[^a-z0-9._-]/g, "").slice(0, 24);
+}
+
+function isNetworkError(error) {
+  const message = String(error?.message || "");
+  return (
+    error instanceof TypeError ||
+    message.includes("Failed to fetch") ||
+    message.includes("NetworkError") ||
+    message.includes("URL scheme")
+  );
+}
+
+function base64UrlEncodeJson(value) {
+  const json = JSON.stringify(value);
+  const bytes =
+    typeof TextEncoder !== "undefined"
+      ? new TextEncoder().encode(json)
+      : Uint8Array.from(unescape(encodeURIComponent(json)), (char) => char.charCodeAt(0));
+  let binary = "";
+  bytes.forEach((byte) => {
+    binary += String.fromCharCode(byte);
+  });
+
+  return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
+}
+
+function base64UrlDecodeJson(value) {
+  try {
+    const padded = String(value || "").replaceAll("-", "+").replaceAll("_", "/");
+    const base64 = padded.padEnd(Math.ceil(padded.length / 4) * 4, "=");
+    const binary = atob(base64);
+    const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
+    const json =
+      typeof TextDecoder !== "undefined"
+        ? new TextDecoder().decode(bytes)
+        : decodeURIComponent(escape(binary));
+    return JSON.parse(json);
+  } catch {
+    return null;
+  }
+}
+
 function getLocalUsers() {
   try {
     const parsed = JSON.parse(localStorage.getItem(LOCAL_USERS_STORAGE_KEY) || "{}");
@@ -1715,24 +2497,45 @@ function saveLocalUsers(users) {
   localStorage.setItem(LOCAL_USERS_STORAGE_KEY, JSON.stringify(users));
 }
 
-function recordLocalUserFromState() {
+function findLocalUserByEmail(email) {
+  const users = getLocalUsers();
+  const normalizedEmail = String(email || "").trim().toLowerCase();
+
+  if (users[normalizedEmail]) {
+    return { users, email: normalizedEmail, user: users[normalizedEmail] };
+  }
+
+  const matchedEmail = Object.keys(users).find((key) => key.toLowerCase() === normalizedEmail);
+  if (!matchedEmail) {
+    return { users, email: normalizedEmail, user: null };
+  }
+
+  return { users, email: matchedEmail, user: users[matchedEmail] };
+}
+
+function recordLocalUserFromState(options = {}) {
   if (!state.email || !state.username || !state.name) {
     return;
   }
 
   const users = getLocalUsers();
-  const existing = users[state.email] || {};
+  const normalizedEmail = state.email.toLowerCase();
+  const existing = users[normalizedEmail] || {};
   const now = Date.now();
   const role = getLocalRoleForCurrentProfile();
 
-  users[state.email] = {
+  users[normalizedEmail] = {
     id: existing.id || `local-${now}`,
-    email: state.email,
+    email: normalizedEmail,
     username: state.username,
     name: state.name,
     mobile: state.mobile,
     role,
-    status: existing.status === "removed" && role !== "admin" ? "removed" : "active",
+    status:
+      options.status ||
+      (existing.status === "removed" && role !== "admin" ? "removed" : "active"),
+    passwordHash: existing.passwordHash || null,
+    passwordUpdatedAt: existing.passwordUpdatedAt || null,
     pro: Boolean(existing.pro || state.pro),
     proGrantedAt: existing.proGrantedAt || null,
     proValueUsd: existing.proValueUsd || null,
@@ -1751,10 +2554,94 @@ function recordLocalUserFromState() {
     lastDevice: navigator.userAgent || "This device",
   };
 
-  state.role = users[state.email].role;
-  state.status = users[state.email].status;
-  state.pro = Boolean(users[state.email].pro);
+  state.email = normalizedEmail;
+  state.role = users[normalizedEmail].role;
+  state.status = users[normalizedEmail].status;
+  state.pro = Boolean(users[normalizedEmail].pro);
   saveLocalUsers(users);
+}
+
+async function rememberLocalPasswordForCurrentUser(password = pendingPassword) {
+  if (!password || !state.email) {
+    return;
+  }
+
+  const found = findLocalUserByEmail(state.email);
+  if (!found.user) {
+    return;
+  }
+
+  const salt = found.user.passwordSalt || createLocalVerificationToken();
+  found.user.passwordSalt = salt;
+  found.user.passwordHash = await hashLocalPassword(password, salt);
+  found.user.passwordUpdatedAt = Date.now();
+  found.users[found.email] = found.user;
+  saveLocalUsers(found.users);
+}
+
+async function hashLocalPassword(password, salt) {
+  const payload = `${salt}:${password}`;
+  if (window.crypto?.subtle && typeof TextEncoder !== "undefined") {
+    const digest = await window.crypto.subtle.digest(
+      "SHA-256",
+      new TextEncoder().encode(payload),
+    );
+    return `local_sha256$${salt}$${toHex(digest)}`;
+  }
+
+  return `local_simple$${salt}$${simpleLocalPasswordHash(payload)}`;
+}
+
+async function verifyLocalPassword(password, storedHash) {
+  const [method, salt, expected] = String(storedHash || "").split("$");
+  if (!method || !salt || !expected) {
+    return false;
+  }
+
+  if (method === "local_sha256" && window.crypto?.subtle && typeof TextEncoder !== "undefined") {
+    const actual = await hashLocalPassword(password, salt);
+    return actual === storedHash;
+  }
+
+  if (method === "local_simple") {
+    return simpleLocalPasswordHash(`${salt}:${password}`) === expected;
+  }
+
+  return false;
+}
+
+function simpleLocalPasswordHash(value) {
+  let hash = 2166136261;
+  const text = String(value || "");
+  for (let index = 0; index < text.length; index += 1) {
+    hash ^= text.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+
+  return (hash >>> 0).toString(16).padStart(8, "0");
+}
+
+function toHex(buffer) {
+  return [...new Uint8Array(buffer)]
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+function normalizeLocalUserStatus(user) {
+  if (!user || user.status !== "suspended" || !user.suspendedUntil) {
+    return false;
+  }
+
+  if (Number(user.suspendedUntil) > Date.now()) {
+    return false;
+  }
+
+  user.status = "active";
+  user.suspendedAt = null;
+  user.suspendedUntil = null;
+  user.suspensionDays = null;
+  user.updatedAt = Date.now();
+  return true;
 }
 
 function getLocalRoleForUsername(username) {
@@ -1766,7 +2653,7 @@ function getLocalRoleForUsername(username) {
 }
 
 function getLocalRoleForCurrentProfile() {
-  const existing = getLocalUsers()[state.email];
+  const existing = findLocalUserByEmail(state.email).user;
   return getLocalRoleForUsername(state.username) || existing?.role || state.role || "user";
 }
 
