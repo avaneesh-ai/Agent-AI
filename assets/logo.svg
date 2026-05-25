@@ -1,0 +1,39 @@
+<svg width="128" height="128" viewBox="0 0 128 128" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="tile" x1="17" y1="18" x2="112" y2="111" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#062B3A"/>
+      <stop offset="0.48" stop-color="#0F766E"/>
+      <stop offset="1" stop-color="#F0B84A"/>
+    </linearGradient>
+    <linearGradient id="mail" x1="34" y1="42" x2="88" y2="93" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#D9FFF1"/>
+    </linearGradient>
+    <linearGradient id="spark" x1="82" y1="25" x2="108" y2="52" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFF4B8"/>
+      <stop offset="1" stop-color="#F59E0B"/>
+    </linearGradient>
+    <filter id="lift" x="15" y="18" width="99" height="96" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="10" stdDeviation="8" flood-color="#031926" flood-opacity="0.28"/>
+    </filter>
+  </defs>
+
+  <rect x="8" y="8" width="112" height="112" rx="32" fill="url(#tile)"/>
+  <path d="M22 91.5C39.5 102 61.6 104.4 81.4 96.9C96.6 91.1 107 79.6 112.5 65.5" stroke="#FFFFFF" stroke-opacity="0.18" stroke-width="8" stroke-linecap="round"/>
+  <path d="M19.8 38.5C37.2 26.2 61.2 22.6 82.2 30.7C95.8 35.9 105.1 45 110.8 56.1" stroke="#FFFFFF" stroke-opacity="0.14" stroke-width="8" stroke-linecap="round"/>
+
+  <g filter="url(#lift)">
+    <path d="M33 45C33 40.6 36.6 37 41 37H83C87.4 37 91 40.6 91 45V78C91 82.4 87.4 86 83 86H41C36.6 86 33 82.4 33 78V45Z" fill="url(#mail)"/>
+    <path d="M37.5 44.5 62 63.8 86.5 44.5" stroke="#0B5D60" stroke-width="5.4" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M39 80 55.2 65.3" stroke="#0B5D60" stroke-opacity="0.36" stroke-width="4.2" stroke-linecap="round"/>
+    <path d="M85 80 68.8 65.3" stroke="#0B5D60" stroke-opacity="0.36" stroke-width="4.2" stroke-linecap="round"/>
+
+    <circle cx="86" cy="78" r="20" fill="#062B3A"/>
+    <path d="M76.5 78.3 82.4 84.2 96 70.7" stroke="#F0B84A" stroke-width="5.2" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+
+  <path d="M93.3 23.5 97.4 34.4 108.4 38.5 97.4 42.7 93.3 53.6 89.1 42.7 78.2 38.5 89.1 34.4 93.3 23.5Z" fill="url(#spark)"/>
+  <circle cx="31" cy="31" r="5" fill="#D9FFF1"/>
+  <path d="M28.2 31 30.5 33.3 34.2 28.8" stroke="#062B3A" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M30.8 98.5H51.7" stroke="#D9FFF1" stroke-opacity="0.64" stroke-width="6" stroke-linecap="round"/>
+</svg>

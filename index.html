@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#0f766e" />
+    <title>Login Verification App</title>
+    <link rel="icon" href="assets/logo.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="assets/icons/icon-192.png" />
+    <link rel="manifest" href="assets/manifest.webmanifest" />
+    <link rel="stylesheet" href="assets/styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="auth-panel" aria-live="polite">
+        <div class="brand-row">
+          <span class="brand-mark" aria-hidden="true">
+            <img src="assets/logo.svg" alt="" />
+          </span>
+          <span class="brand-name">Secure Entry</span>
+          <button class="theme-toggle" type="button" id="theme-toggle" aria-label="Switch to dark mode">
+            <svg class="theme-icon theme-icon-sun" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M12 4V2" />
+              <path d="M12 22v-2" />
+              <path d="m4.9 4.9-1.4-1.4" />
+              <path d="m20.5 20.5-1.4-1.4" />
+              <path d="M4 12H2" />
+              <path d="M22 12h-2" />
+              <path d="m4.9 19.1-1.4 1.4" />
+              <path d="m20.5 3.5-1.4 1.4" />
+              <circle cx="12" cy="12" r="4.2" />
+            </svg>
+            <svg class="theme-icon theme-icon-moon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M20.1 14.8A7.8 7.8 0 0 1 9.2 3.9 8.8 8.8 0 1 0 20.1 14.8Z" />
+            </svg>
+          </button>
+        </div>
+
+        <div class="progress" aria-label="Login progress">
+          <span class="step-dot" data-step="credentials"></span>
+          <span class="step-line"></span>
+          <span class="step-dot" data-step="profile"></span>
+          <span class="step-line"></span>
+          <span class="step-dot" data-step="verify"></span>
+        </div>
+
+        <div id="screen-root"></div>
+      </section>
+
+      <aside class="visual-panel" aria-label="Verification overview">
+        <div class="visual-card visual-card-top">
+          <span class="visual-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" role="img">
+              <path d="M4 6.8h16v10.4H4z" />
+              <path d="m4.7 7.5 7.3 5.2 7.3-5.2" />
+            </svg>
+          </span>
+          <div>
+            <strong>Email link</strong>
+            <p>A one-time link is created after the profile step.</p>
+          </div>
+        </div>
+        <div class="visual-card">
+          <span class="visual-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" role="img">
+              <path d="M12 3.5a8.5 8.5 0 1 0 0 17 8.5 8.5 0 0 0 0-17Z" />
+              <path d="m8.9 12.1 2.1 2.1 4.5-4.8" />
+            </svg>
+          </span>
+          <div>
+            <strong>Confirm login</strong>
+            <p>The user approves access before entering the app.</p>
+          </div>
+        </div>
+      </aside>
+    </main>
+
+    <script src="assets/app.js"></script>
+  </body>
+</html>
