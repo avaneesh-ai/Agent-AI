@@ -3,6 +3,7 @@ const progressDots = [...document.querySelectorAll(".step-dot")];
 const themeToggle = document.querySelector("#theme-toggle");
 const THEME_STORAGE_KEY = "secure-entry-theme";
 const LOCAL_USERS_STORAGE_KEY = "secure-entry-local-users";
+const LOCAL_CHAT_STORAGE_KEY = "secure-entry-local-chat";
 const LOCAL_DEVICE_ADMIN_STORAGE_KEY = "secure-entry-this-laptop-admin";
 const LOCAL_DEVICE_ADMIN_HASH = "this-laptop-admin";
 const LOCAL_ADMIN_USERNAMES = ["avaneesh"];
@@ -36,6 +37,15 @@ const state = {
   adminPreviewLink: "",
   aiModels: [],
   latestAiModel: null,
+  aiModelMessage: "",
+  chatThreads: [],
+  chatMessages: [],
+  chatTargetEmail: "",
+  chatStatus: "idle",
+  chatMessage: "",
+  miniGame: null,
+  miniGameMessage: "",
+  miniGameBestScore: 0,
   rejoinToken: "",
   rejoinMessage: "",
 };
@@ -74,6 +84,15 @@ function clearSession() {
     adminPreviewLink: "",
     aiModels: [],
     latestAiModel: null,
+    aiModelMessage: "",
+    chatThreads: [],
+    chatMessages: [],
+    chatTargetEmail: "",
+    chatStatus: "idle",
+    chatMessage: "",
+    miniGame: null,
+    miniGameMessage: "",
+    miniGameBestScore: 0,
     rejoinToken: "",
     rejoinMessage: "",
   });
@@ -294,6 +313,15 @@ function renderCredentialsScreen() {
       state.adminPreviewLink = "";
       state.aiModels = [];
       state.latestAiModel = null;
+      state.aiModelMessage = "";
+      state.chatThreads = [];
+      state.chatMessages = [];
+      state.chatTargetEmail = "";
+      state.chatStatus = "idle";
+      state.chatMessage = "";
+      state.miniGame = null;
+      state.miniGameMessage = "";
+      state.miniGameBestScore = 0;
       state.rejoinToken = "";
       state.rejoinMessage = "";
     }
@@ -423,6 +451,15 @@ function renderProfileScreen() {
     state.adminPreviewLink = "";
     state.aiModels = [];
     state.latestAiModel = null;
+    state.aiModelMessage = "";
+    state.chatThreads = [];
+    state.chatMessages = [];
+    state.chatTargetEmail = "";
+    state.chatStatus = "idle";
+    state.chatMessage = "";
+    state.miniGame = null;
+    state.miniGameMessage = "";
+    state.miniGameBestScore = 0;
     saveSession();
 
     submitButton.disabled = true;
@@ -799,6 +836,8 @@ function renderAppScreen() {
 
       <div class="app-tabs" role="tablist" aria-label="App tabs">
         ${renderAppTabButton("account", "Account")}
+        ${renderAppTabButton("chat", "Chat")}
+        ${renderAppTabButton("games", "Mini Games")}
         ${canUseAdminTab() ? renderAppTabButton("admin", "Admin") : ""}
         ${canUsePreAdminTab() ? renderAppTabButton("pre-admin", "Pre-Admin") : ""}
         ${renderAppTabButton("agent", "AI Agent")}
@@ -824,6 +863,14 @@ function renderAppScreen() {
 
   if (state.activeAppTab === "agent") {
     setupAgentInteractions();
+  }
+
+  if (state.activeAppTab === "chat") {
+    setupChatInteractions();
+  }
+
+  if (state.activeAppTab === "games") {
+    setupMiniGameInteractions();
   }
 
   if (state.activeAppTab === "admin" || state.activeAppTab === "pre-admin") {
@@ -901,6 +948,14 @@ function renderActiveAppTab() {
     return renderAgentPanel();
   }
 
+  if (state.activeAppTab === "chat") {
+    return renderChatPanel();
+  }
+
+  if (state.activeAppTab === "games") {
+    return renderMiniGamesPanel();
+  }
+
   return renderAccountPanel();
 }
 
@@ -939,6 +994,190 @@ function renderAccountPanel() {
   `;
 }
 
+function renderChatPanel() {
+  const isStaff = canUseStaffChat();
+  const threads = getChatThreadOptions();
+  const selectedThread = getSelectedChatThread(threads);
+  const chatTitle = isStaff ? "Chat with users" : "Chat with Admin";
+  const chatCopy = isStaff
+    ? "Choose a user and reply from Admin chat."
+    : "Send a message to Admin. Admins and pre-admins can reply from their Chat tab.";
+  const targetSelector =
+    isStaff && threads.length
+      ? `
+        <label class="chat-target">
+          <span>User</span>
+          <select id="chat-target">
+            ${threads
+              .map(
+                (thread) => `
+                  <option value="${escapeHtml(thread.email)}" ${thread.email === selectedThread?.email ? "selected" : ""}>
+                    ${escapeHtml(thread.name || thread.email)}${thread.localOnly ? " (this browser)" : ""}
+                  </option>
+                `,
+              )
+              .join("")}
+          </select>
+        </label>
+      `
+      : "";
+
+  return `
+    <div class="dashboard-card chat-panel">
+      <div class="chat-heading">
+        <div>
+          <h2>${chatTitle}</h2>
+          <p>${chatCopy}</p>
+        </div>
+        <button class="button secondary chat-refresh" type="button" id="chat-refresh">Refresh</button>
+      </div>
+
+      ${targetSelector}
+      ${
+        state.chatMessage
+          ? `<div class="admin-message"><span>${escapeHtml(state.chatMessage)}</span></div>`
+          : ""
+      }
+
+      <div class="chat-messages" id="chat-messages" aria-live="polite">
+        ${
+          state.chatStatus === "loading"
+            ? `<p class="screen-footer-note">Loading chat...</p>`
+            : state.chatMessages.length
+              ? state.chatMessages.map(renderChatMessage).join("")
+              : `<p class="screen-footer-note">${isStaff && !selectedThread ? "No users are available to chat yet." : "No messages yet."}</p>`
+        }
+      </div>
+
+      <form class="chat-form" id="chat-form">
+        <label class="sr-only" for="chat-input">Chat message</label>
+        <input id="chat-input" name="message" type="text" autocomplete="off" placeholder="${isStaff ? "Reply to this user" : "Message Admin"}" ${isStaff && !selectedThread ? "disabled" : ""} />
+        <button class="button chat-send" type="submit" ${isStaff && !selectedThread ? "disabled" : ""}>Send</button>
+      </form>
+    </div>
+  `;
+}
+
+function renderChatMessage(message) {
+  const isMine = message.fromEmail === state.email;
+  return `
+    <div class="chat-message ${isMine ? "from-me" : "from-them"}">
+      <span>
+        <strong>${escapeHtml(isMine ? "You" : message.fromName || message.fromEmail || "Admin")}</strong>
+        ${escapeHtml(message.text)}
+        <small>${escapeHtml(formatDate(message.createdAt))}</small>
+      </span>
+    </div>
+  `;
+}
+
+function renderMiniGamesPanel() {
+  return `
+    <div class="dashboard-card games-panel">
+      <div class="games-heading">
+        <div>
+          <h2>Mini AI Games</h2>
+          <p>The app creates small playable games for free time.</p>
+        </div>
+        <button class="button secondary" type="button" id="new-random-game">Surprise me</button>
+      </div>
+
+      <form class="game-form" id="mini-game-form">
+        <label class="sr-only" for="mini-game-prompt">Mini game idea</label>
+        <input id="mini-game-prompt" name="prompt" type="text" autocomplete="off" placeholder="Try: memory colors, number puzzle, reflex target" />
+        <button class="button" type="submit">Create game</button>
+      </form>
+
+      <div class="agent-quick-actions" aria-label="Mini game ideas">
+        ${["Reflex target", "Memory colors", "Number puzzle", "Fast focus"]
+          .map((label) => `<button class="agent-chip" type="button" data-game-prompt="${escapeHtml(label)}">${escapeHtml(label)}</button>`)
+          .join("")}
+      </div>
+
+      ${state.miniGameMessage ? `<div class="admin-message"><span>${escapeHtml(state.miniGameMessage)}</span></div>` : ""}
+      ${state.miniGame ? renderActiveMiniGame() : renderMiniGameEmptyState()}
+    </div>
+  `;
+}
+
+function renderMiniGameEmptyState() {
+  return `
+    <div class="mini-game-card">
+      <strong>No mini game created yet</strong>
+      <p>Use the creator above and the app will make a quick playable game.</p>
+    </div>
+  `;
+}
+
+function renderActiveMiniGame() {
+  const game = state.miniGame;
+  return `
+    <div class="mini-game-card">
+      <div class="mini-game-topline">
+        <div>
+          <strong>${escapeHtml(game.title)}</strong>
+          <p>${escapeHtml(game.instructions)}</p>
+        </div>
+        <div class="game-stats">
+          <span>Score ${game.score}</span>
+          <span>Best ${state.miniGameBestScore}</span>
+          <span>Round ${game.round}</span>
+        </div>
+      </div>
+      ${renderMiniGamePlayArea(game)}
+      <div class="actions compact-actions">
+        <button class="button secondary" type="button" id="reset-mini-game">Reset</button>
+        <button class="button" type="button" id="next-mini-game">New game</button>
+      </div>
+    </div>
+  `;
+}
+
+function renderMiniGamePlayArea(game) {
+  if (game.type === "math") {
+    return `
+      <form class="mini-math-game" id="mini-math-form">
+        <span class="math-question">${escapeHtml(game.question.text)}</span>
+        <label class="sr-only" for="math-answer">Answer</label>
+        <input id="math-answer" name="answer" type="number" inputmode="numeric" placeholder="Answer" />
+        <button class="button" type="submit">Check</button>
+      </form>
+    `;
+  }
+
+  if (game.type === "memory") {
+    return `
+      <div class="memory-game">
+        <div class="memory-sequence" aria-label="Pattern">
+          ${game.sequence.map((color) => `<span>${escapeHtml(color)}</span>`).join("")}
+        </div>
+        <div class="memory-buttons">
+          ${game.colors
+            .map(
+              (color) => `
+                <button class="memory-color" type="button" data-memory-color="${escapeHtml(color)}">
+                  ${escapeHtml(color)}
+                </button>
+              `,
+            )
+            .join("")}
+        </div>
+        <p class="screen-footer-note">Progress: ${game.progress} / ${game.sequence.length}</p>
+      </div>
+    `;
+  }
+
+  return `
+    <div class="target-grid" aria-label="Reflex target grid">
+      ${Array.from({ length: 9 }, (_, index) => `
+        <button class="target-cell ${index === game.targetIndex ? "is-target" : ""}" type="button" data-game-cell="${index}" aria-label="Cell ${index + 1}">
+          ${index === game.targetIndex ? "★" : ""}
+        </button>
+      `).join("")}
+    </div>
+  `;
+}
+
 function renderAgentPanel() {
   return `
     <div class="dashboard-card agent-card">
@@ -952,32 +1191,42 @@ function renderAgentPanel() {
           </svg>
         </span>
         <div>
-          <h2>Secure Entry AI Chatbot</h2>
-          <p>Ask anything. Every prompt becomes a saved AI model blueprint.</p>
+          <h2>Secure Entry AI</h2>
+          <p>Build executed AI models and chat in a separate question box.</p>
         </div>
       </div>
 
-      <div class="agent-messages" id="agent-messages" aria-live="polite">
-        ${state.agentMessages.map(renderAgentMessage).join("")}
-      </div>
+      <section class="ai-tool-section">
+        <h3>AI Model Executor</h3>
+        <div class="agent-quick-actions" aria-label="AI model prompt examples">
+          ${["Create a login support model", "Security checklist model", "Pro subscription workflow", "Admin review helper"]
+            .map((label) => `<button class="agent-chip" type="button" data-model-prompt="${escapeHtml(label)}">${escapeHtml(label)}</button>`)
+            .join("")}
+        </div>
+        ${renderLatestAiModel()}
+        <form class="agent-form" id="ai-model-form">
+          <label class="sr-only" for="ai-model-input">Prompt for AI model executor</label>
+          <input id="ai-model-input" name="message" type="text" autocomplete="off" placeholder="Prompt the AI model executor" />
+          <button class="button agent-send" type="submit">Execute</button>
+        </form>
+      </section>
 
-      <div class="agent-quick-actions" aria-label="AI agent quick actions">
-        ${["Summarize my account", "Create a login support model", "Security checklist", "Draft welcome message"]
-          .map((label) => `<button class="agent-chip" type="button" data-prompt="${escapeHtml(label)}">${escapeHtml(label)}</button>`)
-          .join("")}
-      </div>
-
-      <div class="agent-tools">
-        ${renderVoiceModeControl()}
-      </div>
-
-      ${renderLatestAiModel()}
-
-      <form class="agent-form" id="agent-form">
-        <label class="sr-only" for="agent-input">Message the AI agent</label>
-        <input id="agent-input" name="message" type="text" autocomplete="off" placeholder="Message the AI chatbot" />
-        <button class="button agent-send" type="submit">Send</button>
-      </form>
+      <section class="ai-tool-section">
+        <div class="ai-section-heading">
+          <h3>AI Chat Box</h3>
+          <div class="agent-tools">
+            ${renderVoiceModeControl()}
+          </div>
+        </div>
+        <div class="agent-messages" id="agent-messages" aria-live="polite">
+          ${state.agentMessages.map(renderAgentMessage).join("")}
+        </div>
+        <form class="agent-form" id="agent-form">
+          <label class="sr-only" for="agent-input">Ask the AI chat box</label>
+          <input id="agent-input" name="message" type="text" autocomplete="off" placeholder="Ask any question on any topic" />
+          <button class="button agent-send" type="submit">Send</button>
+        </form>
+      </section>
     </div>
   `;
 }
@@ -1012,8 +1261,9 @@ function renderLatestAiModel() {
   if (!state.latestAiModel) {
     return `
       <div class="ai-model-card">
+        ${state.aiModelMessage ? `<p class="ai-model-status">${escapeHtml(state.aiModelMessage)}</p>` : ""}
         <strong>No AI model created yet</strong>
-        <p>Send any prompt and the agent will execute it into a saved model blueprint.</p>
+        <p>Enter a prompt above and the agent will execute it into a saved model blueprint.</p>
       </div>
     `;
   }
@@ -1021,8 +1271,10 @@ function renderLatestAiModel() {
   const model = state.latestAiModel;
   return `
     <div class="ai-model-card">
+      ${state.aiModelMessage ? `<p class="ai-model-status">${escapeHtml(state.aiModelMessage)}</p>` : ""}
       <strong>${escapeHtml(model.name)}</strong>
       <p>${escapeHtml(model.objective)}</p>
+      ${model.execution?.result ? `<p>${escapeHtml(model.execution.result)}</p>` : ""}
       <div class="ai-model-tags">
         ${(model.capabilities || []).map((item) => `<span>${escapeHtml(item)}</span>`).join("")}
       </div>
@@ -1069,7 +1321,7 @@ function renderAdminPanel() {
       <div class="admin-heading">
         <div>
           <h2>${tabTitle}</h2>
-          <p>Registered users from Firebase appear here across WiFi, laptops, desktops, and mobile phones when they use this app server.</p>
+          <p>Registered users from Firebase and old users saved in this browser appear here.</p>
         </div>
         <button class="button secondary admin-refresh" type="button" id="admin-refresh">Refresh</button>
       </div>
@@ -1092,8 +1344,30 @@ function renderAdminPanel() {
 
 function renderAdminVerificationForm() {
   return `
-    <form class="admin-link-form" id="admin-link-form" novalidate>
-      <h3>Create user verification link</h3>
+    <div class="admin-link-sections">
+      ${renderAdminVerificationFormSection({
+        role: "user",
+        title: "Create user verification link",
+        button: "Create user link",
+      })}
+      ${renderAdminVerificationFormSection({
+        role: "pre-admin",
+        title: "Create pre-admin verification link",
+        button: "Create pre-admin link",
+      })}
+      ${renderAdminVerificationFormSection({
+        role: "admin",
+        title: "Create admin verification link",
+        button: "Create admin link",
+      })}
+    </div>
+  `;
+}
+
+function renderAdminVerificationFormSection({ role, title, button }) {
+  return `
+    <form class="admin-link-form" data-link-role="${escapeHtml(role)}" novalidate>
+      <h3>${escapeHtml(title)}</h3>
       <div class="admin-link-fields">
         <label>
           <span>Name</span>
@@ -1107,9 +1381,13 @@ function renderAdminVerificationForm() {
           <span>Phone number</span>
           <input name="mobile" type="tel" autocomplete="off" placeholder="10 digit mobile number" required />
         </label>
+        <label>
+          <span>Temporary password</span>
+          <input name="password" type="password" autocomplete="new-password" placeholder="At least 6 characters" required minlength="6" />
+        </label>
       </div>
       <div class="actions compact-actions">
-        <button class="button" type="submit">Create verification link</button>
+        <button class="button" type="submit">${escapeHtml(button)}</button>
       </div>
     </form>
   `;
@@ -1160,6 +1438,14 @@ function renderAdminUserCard(user) {
           <span>Registered</span>
           <strong>${escapeHtml(formatDate(user.createdAt))}</strong>
         </div>
+        ${
+          user.localOnly
+            ? `<div class="profile-row">
+                <span>Saved in</span>
+                <strong>This browser only</strong>
+              </div>`
+            : ""
+        }
       </div>
 
       <div class="admin-actions">
@@ -1218,7 +1504,7 @@ function renderAdminActionButton(user, action, label) {
   const disabledReason = getDisabledAdminActionReason(user, action);
   const priceLabel = action === "give-free-pro" ? `${label} ($25)` : label;
   return `
-    <button class="admin-icon-button ${action === "remove" ? "danger" : ""}" type="button" data-admin-action="${action}" data-email="${escapeHtml(user.email)}" ${disabledReason ? "disabled" : ""} title="${escapeHtml(disabledReason || priceLabel)}" aria-label="${escapeHtml(priceLabel)}">
+    <button class="admin-icon-button ${action === "remove" ? "danger" : ""} ${disabledReason ? "is-unavailable" : ""}" type="button" data-admin-action="${action}" data-email="${escapeHtml(user.email)}" data-disabled-reason="${escapeHtml(disabledReason)}" title="${escapeHtml(disabledReason || priceLabel)}" aria-label="${escapeHtml(priceLabel)}">
       ${renderAdminActionIcon(action)}
       <span>${escapeHtml(priceLabel)}</span>
     </button>
@@ -1334,10 +1620,461 @@ function setupAppTabInteractions() {
       state.activeAppTab = button.dataset.tab;
       state.adminMessage = "";
       state.adminPreviewLink = "";
+      if (button.dataset.tab === "chat") {
+        state.chatMessage = "";
+      }
       saveSession();
       renderAppScreen();
     });
   });
+}
+
+function setupChatInteractions() {
+  const messages = document.querySelector("#chat-messages");
+  messages.scrollTop = messages.scrollHeight;
+
+  document.querySelector("#chat-refresh")?.addEventListener("click", () => {
+    loadChatMessages({ force: true });
+  });
+
+  document.querySelector("#chat-target")?.addEventListener("change", (event) => {
+    state.chatTargetEmail = event.currentTarget.value;
+    state.chatMessage = "";
+    state.chatStatus = "idle";
+    saveSession();
+    loadChatMessages({ force: true });
+  });
+
+  document.querySelector("#chat-form")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const input = document.querySelector("#chat-input");
+    await sendChatMessage(input.value);
+    input.value = "";
+  });
+
+  if (state.chatStatus === "idle") {
+    loadChatMessages();
+  }
+}
+
+async function loadChatMessages({ force = false } = {}) {
+  if (state.chatStatus === "loading" && !force) {
+    return;
+  }
+
+  if (!state.sessionToken) {
+    loadLocalChatMessages();
+    return;
+  }
+
+  state.chatStatus = "loading";
+  state.chatMessage = "";
+  saveSession();
+  renderAppScreen();
+
+  try {
+    if (canUseStaffChat()) {
+      const threadsResponse = await fetch("/api/chat/threads", {
+        headers: {
+          Authorization: `Bearer ${state.sessionToken}`,
+        },
+      });
+      const threadsData = await readJsonResponse(threadsResponse);
+      if (!threadsResponse.ok) {
+        throw new Error(threadsData.message || "Could not load chat users.");
+      }
+
+      state.chatThreads = mergeChatThreadsWithLocal(threadsData.threads || []);
+      const selectedThread = getSelectedChatThread(state.chatThreads);
+      state.chatTargetEmail = selectedThread?.email || "";
+
+      if (!selectedThread) {
+        state.chatMessages = [];
+        state.chatStatus = "ready";
+        state.chatMessage = "No users are available to chat yet.";
+      } else if (selectedThread.localOnly) {
+        loadLocalChatMessages({ keepThreads: true });
+        return;
+      } else {
+        await loadServerChatThread(selectedThread.email);
+      }
+    } else {
+      await loadServerChatThread("");
+    }
+  } catch (error) {
+    loadLocalChatMessages();
+    if (!state.chatMessages.length) {
+      state.chatMessage = error.message;
+    }
+  }
+
+  saveSession();
+  renderAppScreen();
+}
+
+async function loadServerChatThread(userEmail) {
+  const params = userEmail ? `?userEmail=${encodeURIComponent(userEmail)}` : "";
+  const response = await fetch(`/api/chat/messages${params}`, {
+    headers: {
+      Authorization: `Bearer ${state.sessionToken}`,
+    },
+  });
+  const data = await readJsonResponse(response);
+
+  if (!response.ok) {
+    throw new Error(data.message || "Could not load chat messages.");
+  }
+
+  state.chatMessages = data.messages || [];
+  state.chatThreads = canUseStaffChat()
+    ? mergeChatThreadsWithLocal(data.threads || state.chatThreads || [])
+    : data.threads || state.chatThreads || [];
+  state.chatTargetEmail = data.threadUserEmail || state.chatTargetEmail;
+  state.chatStatus = "ready";
+  state.chatMessage = "";
+}
+
+function loadLocalChatMessages({ keepThreads = false } = {}) {
+  const threads = keepThreads ? state.chatThreads : mergeChatThreadsWithLocal([]);
+  const selectedThread = getSelectedChatThread(threads);
+  const threadEmail = canUseStaffChat() ? selectedThread?.email || "" : state.email;
+  const localMessages = getLocalChatMessages().filter(
+    (message) => message.threadUserEmail === threadEmail,
+  );
+
+  state.chatThreads = threads;
+  state.chatTargetEmail = threadEmail;
+  state.chatMessages = localMessages;
+  state.chatStatus = "ready";
+  state.chatMessage = state.sessionToken
+    ? "Showing local browser chat for this user."
+    : "Showing chat saved in this browser.";
+  saveSession();
+  renderAppScreen();
+}
+
+async function sendChatMessage(text) {
+  const message = String(text || "").trim();
+  if (!message) {
+    return;
+  }
+
+  const selectedThread = getSelectedChatThread(getChatThreadOptions());
+  if (canUseStaffChat() && !selectedThread) {
+    state.chatMessage = "Choose a user before sending a chat message.";
+    saveSession();
+    renderAppScreen();
+    return;
+  }
+
+  if (!state.sessionToken || selectedThread?.localOnly) {
+    sendLocalChatMessage(message);
+    return;
+  }
+
+  state.chatStatus = "loading";
+  state.chatMessage = "";
+  saveSession();
+  renderAppScreen();
+
+  try {
+    const response = await fetch("/api/chat/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${state.sessionToken}`,
+      },
+      body: JSON.stringify({
+        text: message,
+        userEmail: canUseStaffChat() ? selectedThread.email : undefined,
+      }),
+    });
+    const data = await readJsonResponse(response);
+
+    if (!response.ok) {
+      throw new Error(data.message || "Could not send this chat message.");
+    }
+
+    state.chatMessages = data.messages || [];
+    state.chatThreads = canUseStaffChat()
+      ? mergeChatThreadsWithLocal(data.threads || state.chatThreads || [])
+      : data.threads || state.chatThreads || [];
+    state.chatTargetEmail = data.threadUserEmail || state.chatTargetEmail;
+    state.chatStatus = "ready";
+    state.chatMessage = "";
+  } catch (error) {
+    state.chatStatus = "ready";
+    state.chatMessage = error.message;
+  }
+
+  saveSession();
+  renderAppScreen();
+}
+
+function sendLocalChatMessage(text) {
+  const selectedThread = getSelectedChatThread(getChatThreadOptions());
+  const threadUserEmail = canUseStaffChat() ? selectedThread?.email || "" : state.email;
+
+  if (!threadUserEmail) {
+    state.chatMessage = "Choose a user before sending a chat message.";
+    saveSession();
+    renderAppScreen();
+    return;
+  }
+
+  const messages = getLocalChatMessages();
+  messages.push({
+    id: `local-chat-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    threadUserEmail,
+    fromEmail: state.email,
+    fromName: state.name || state.username || state.email,
+    fromRole: state.role || "user",
+    toEmail: canUseStaffChat() ? threadUserEmail : "admins",
+    text,
+    createdAt: Date.now(),
+    localOnly: true,
+  });
+  saveLocalChatMessages(messages);
+  loadLocalChatMessages();
+}
+
+function setupMiniGameInteractions() {
+  document.querySelector("#mini-game-form")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const input = document.querySelector("#mini-game-prompt");
+    startMiniGame(input.value || "surprise me");
+    input.value = "";
+  });
+
+  document.querySelector("#new-random-game")?.addEventListener("click", () => {
+    startMiniGame("surprise me");
+  });
+
+  document.querySelector("#next-mini-game")?.addEventListener("click", () => {
+    startMiniGame("surprise me");
+  });
+
+  document.querySelector("#reset-mini-game")?.addEventListener("click", () => {
+    startMiniGame(state.miniGame?.prompt || "surprise me");
+  });
+
+  document.querySelectorAll("[data-game-prompt]").forEach((button) => {
+    button.addEventListener("click", () => {
+      startMiniGame(button.dataset.gamePrompt || "surprise me");
+    });
+  });
+
+  document.querySelectorAll("[data-game-cell]").forEach((button) => {
+    button.addEventListener("click", () => {
+      handleTargetCell(Number(button.dataset.gameCell));
+    });
+  });
+
+  document.querySelectorAll("[data-memory-color]").forEach((button) => {
+    button.addEventListener("click", () => {
+      handleMemoryColor(button.dataset.memoryColor);
+    });
+  });
+
+  document.querySelector("#mini-math-form")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const input = document.querySelector("#math-answer");
+    handleMathAnswer(input.value);
+  });
+}
+
+function startMiniGame(prompt = "surprise me") {
+  state.miniGame = createMiniGame(prompt);
+  state.miniGameMessage = `${state.miniGame.title} created by the app.`;
+  updateMiniGameBestScore();
+  saveSession();
+  renderAppScreen();
+}
+
+function createMiniGame(prompt) {
+  const type = chooseMiniGameType(prompt);
+
+  if (type === "math") {
+    return createMathMiniGame(prompt);
+  }
+
+  if (type === "memory") {
+    return createMemoryMiniGame(prompt);
+  }
+
+  return createTargetMiniGame(prompt);
+}
+
+function chooseMiniGameType(prompt) {
+  const text = String(prompt || "").toLowerCase();
+  if (text.includes("math") || text.includes("number") || text.includes("puzzle")) {
+    return "math";
+  }
+
+  if (text.includes("memory") || text.includes("color") || text.includes("pattern")) {
+    return "memory";
+  }
+
+  if (text.includes("focus") || text.includes("fast") || text.includes("reflex")) {
+    return "target";
+  }
+
+  return ["target", "memory", "math"][randomInt(3)];
+}
+
+function createMiniGameBase(type, prompt, title, instructions) {
+  return {
+    id: `mini-game-${Date.now()}-${randomInt(1000)}`,
+    type,
+    prompt: String(prompt || "surprise me"),
+    title,
+    instructions,
+    score: 0,
+    round: 1,
+  };
+}
+
+function createTargetMiniGame(prompt) {
+  return {
+    ...createMiniGameBase(
+      "target",
+      prompt,
+      "AI Reflex Target",
+      "Tap the star as fast as you can. Every correct tap creates a new target.",
+    ),
+    targetIndex: randomInt(9),
+  };
+}
+
+function createMathMiniGame(prompt) {
+  return {
+    ...createMiniGameBase(
+      "math",
+      prompt,
+      "AI Number Puzzle",
+      "Solve the number challenge. The app makes a new puzzle after every answer.",
+    ),
+    question: createMathQuestion(1),
+  };
+}
+
+function createMemoryMiniGame(prompt) {
+  const colors = ["Green", "Blue", "Gold", "Red"];
+  return {
+    ...createMiniGameBase(
+      "memory",
+      prompt,
+      "AI Memory Colors",
+      "Click the colors in the same order shown in the pattern.",
+    ),
+    colors,
+    sequence: createMemorySequence(3, colors),
+    progress: 0,
+  };
+}
+
+function handleTargetCell(index) {
+  const game = state.miniGame;
+  if (!game || game.type !== "target") {
+    return;
+  }
+
+  if (index === game.targetIndex) {
+    game.score += 1;
+    game.round += 1;
+    game.targetIndex = randomInt(9);
+    state.miniGameMessage = "Hit. The app created a fresh target.";
+  } else {
+    game.score = Math.max(0, game.score - 1);
+    state.miniGameMessage = "Missed. Try the star.";
+  }
+
+  updateMiniGameBestScore();
+  saveSession();
+  renderAppScreen();
+}
+
+function handleMathAnswer(value) {
+  const game = state.miniGame;
+  if (!game || game.type !== "math") {
+    return;
+  }
+
+  const answer = Number(value);
+  if (!Number.isFinite(answer)) {
+    state.miniGameMessage = "Enter a number to answer the puzzle.";
+    saveSession();
+    renderAppScreen();
+    return;
+  }
+
+  if (answer === game.question.answer) {
+    game.score += 2;
+    game.round += 1;
+    game.question = createMathQuestion(game.round);
+    state.miniGameMessage = "Correct. The app created a harder puzzle.";
+  } else {
+    game.score = Math.max(0, game.score - 1);
+    state.miniGameMessage = `Not quite. The answer was ${game.question.answer}. A new puzzle is ready.`;
+    game.question = createMathQuestion(game.round);
+  }
+
+  updateMiniGameBestScore();
+  saveSession();
+  renderAppScreen();
+}
+
+function handleMemoryColor(color) {
+  const game = state.miniGame;
+  if (!game || game.type !== "memory") {
+    return;
+  }
+
+  if (color === game.sequence[game.progress]) {
+    game.progress += 1;
+    if (game.progress >= game.sequence.length) {
+      game.score += game.sequence.length;
+      game.round += 1;
+      game.sequence = createMemorySequence(Math.min(8, 3 + Math.floor(game.round / 2)), game.colors);
+      game.progress = 0;
+      state.miniGameMessage = "Pattern cleared. The app made the next one harder.";
+    } else {
+      state.miniGameMessage = "Good. Keep going.";
+    }
+  } else {
+    game.score = Math.max(0, game.score - 1);
+    game.progress = 0;
+    state.miniGameMessage = "Pattern reset. Start from the first color again.";
+  }
+
+  updateMiniGameBestScore();
+  saveSession();
+  renderAppScreen();
+}
+
+function updateMiniGameBestScore() {
+  state.miniGameBestScore = Math.max(state.miniGameBestScore || 0, state.miniGame?.score || 0);
+}
+
+function createMathQuestion(round) {
+  const first = randomInt(8 + round) + 2;
+  const second = randomInt(8 + round) + 2;
+  const operation = round % 3 === 0 ? "x" : round % 2 === 0 ? "-" : "+";
+  const answer =
+    operation === "x" ? first * second : operation === "-" ? first - second : first + second;
+
+  return {
+    text: `${first} ${operation} ${second} = ?`,
+    answer,
+  };
+}
+
+function createMemorySequence(length, colors) {
+  return Array.from({ length }, () => colors[randomInt(colors.length)]);
+}
+
+function randomInt(max) {
+  return Math.floor(Math.random() * max);
 }
 
 function setupAdminInteractions() {
@@ -1345,12 +2082,15 @@ function setupAdminInteractions() {
     loadAdminUsers({ force: true });
   });
 
-  document.querySelector("#admin-link-form")?.addEventListener("submit", async (event) => {
+  document.querySelectorAll(".admin-link-form").forEach((linkForm) => {
+    linkForm.addEventListener("submit", async (event) => {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     const name = String(form.get("name") || "").trim();
     const email = String(form.get("email") || "").trim().toLowerCase();
     const mobile = String(form.get("mobile") || "").trim();
+    const password = String(form.get("password") || "");
+    const role = event.currentTarget.dataset.linkRole || "user";
     const submitButton = event.currentTarget.querySelector("button[type='submit']");
 
     submitButton.disabled = true;
@@ -1360,7 +2100,7 @@ function setupAdminInteractions() {
     saveSession();
 
     try {
-      const result = await createAdminVerificationLink({ name, email, mobile });
+      const result = await createAdminVerificationLink({ name, email, mobile, password, role });
       state.adminStatus = "ready";
       state.adminMessage = result.message || `Verification link created for ${email}.`;
       state.adminPreviewLink = result.verificationLink || "";
@@ -1373,9 +2113,19 @@ function setupAdminInteractions() {
     saveSession();
     renderAppScreen();
   });
+  });
 
   document.querySelectorAll("[data-admin-action]").forEach((button) => {
     button.addEventListener("click", async () => {
+      if (button.dataset.disabledReason) {
+        state.adminStatus = "ready";
+        state.adminMessage = button.dataset.disabledReason;
+        state.adminPreviewLink = "";
+        saveSession();
+        renderAppScreen();
+        return;
+      }
+
       const card = button.closest(".admin-user-card");
       const daysField = card?.querySelector("[data-suspend-days]");
       await runAdminAction({
@@ -1397,6 +2147,38 @@ function canUseAdminTab() {
 
 function canUsePreAdminTab() {
   return state.role === "pre-admin";
+}
+
+function canUseStaffChat() {
+  return state.role === "admin" || state.role === "pre-admin";
+}
+
+function getChatThreadOptions() {
+  if (!canUseStaffChat()) {
+    return [
+      {
+        email: state.email,
+        name: "Admin",
+        role: "admin",
+        status: "active",
+      },
+    ];
+  }
+
+  const threads = state.chatThreads.length ? state.chatThreads : mergeChatThreadsWithLocal([]);
+  return threads.filter((thread) => thread.email && thread.email !== state.email);
+}
+
+function getSelectedChatThread(threads = getChatThreadOptions()) {
+  if (!canUseStaffChat()) {
+    return threads[0] || null;
+  }
+
+  return (
+    threads.find((thread) => thread.email === state.chatTargetEmail) ||
+    threads[0] ||
+    null
+  );
 }
 
 async function validateCurrentSession() {
@@ -1451,7 +2233,7 @@ function ensureAgentGreeting() {
   state.agentMessages = [
     {
       role: "agent",
-      text: `Hi ${state.name || "there"}, I am your Secure Entry AI Agent. I can help with your login status, account details, verification link, and security next steps.`,
+      text: `Hi ${state.name || "there"}, I am your AI chat box. Ask me any question on any topic.`,
     },
   ];
   saveSession();
@@ -1466,21 +2248,29 @@ function renderAgentMessage(message) {
 }
 
 function setupAgentInteractions() {
-  const form = document.querySelector("#agent-form");
-  const input = document.querySelector("#agent-input");
+  const chatForm = document.querySelector("#agent-form");
+  const chatInput = document.querySelector("#agent-input");
+  const modelForm = document.querySelector("#ai-model-form");
+  const modelInput = document.querySelector("#ai-model-input");
   const messages = document.querySelector("#agent-messages");
 
   messages.scrollTop = messages.scrollHeight;
 
-  form.addEventListener("submit", (event) => {
+  chatForm.addEventListener("submit", (event) => {
     event.preventDefault();
-    sendAgentMessage(input.value);
-    input.value = "";
+    sendAgentMessage(chatInput.value);
+    chatInput.value = "";
   });
 
-  document.querySelectorAll(".agent-chip[data-prompt]").forEach((button) => {
+  modelForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    executeAiModelPrompt(modelInput.value);
+    modelInput.value = "";
+  });
+
+  document.querySelectorAll(".agent-chip[data-model-prompt]").forEach((button) => {
     button.addEventListener("click", () => {
-      sendAgentMessage(button.dataset.prompt);
+      executeAiModelPrompt(button.dataset.modelPrompt);
     });
   });
 
@@ -1494,24 +2284,19 @@ async function sendAgentMessage(text, options = {}) {
   }
 
   state.agentMessages.push({ role: "user", text: message });
-  state.agentMessages.push({ role: "agent", text: "Thinking, executing your prompt, and saving an AI model..." });
+  state.agentMessages.push({ role: "agent", text: "Thinking..." });
   saveSession();
   renderAppScreen();
 
   try {
     const result = await requestAgentChat(message);
-    state.latestAiModel = result.model;
-    state.aiModels = [result.model, ...state.aiModels].slice(0, 5);
     const replyText = result.message;
     state.agentMessages[state.agentMessages.length - 1] = {
       role: "agent",
       text: replyText,
     };
   } catch (error) {
-    const model = createLocalAiModel(message);
-    const replyText = `${getAgentReply(message)}\n\nSaved locally as ${model.name}.`;
-    state.latestAiModel = model;
-    state.aiModels = [model, ...state.aiModels].slice(0, 5);
+    const replyText = getAgentReply(message);
     state.agentMessages[state.agentMessages.length - 1] = {
       role: "agent",
       text: replyText,
@@ -1526,6 +2311,32 @@ async function sendAgentMessage(text, options = {}) {
   if (state.pro && (options.speakReply || voiceModeActive)) {
     speakText(latestReply);
   }
+}
+
+async function executeAiModelPrompt(text) {
+  const prompt = String(text || "").trim();
+  if (!prompt) {
+    return;
+  }
+
+  state.aiModelMessage = "Executing prompt and saving AI model...";
+  saveSession();
+  renderAppScreen();
+
+  try {
+    const result = await requestAiModel(prompt);
+    state.latestAiModel = result.model;
+    state.aiModels = [result.model, ...state.aiModels].slice(0, 5);
+    state.aiModelMessage = result.message || `${result.model.name} executed and saved.`;
+  } catch {
+    const model = createLocalAiModel(prompt);
+    state.latestAiModel = model;
+    state.aiModels = [model, ...state.aiModels].slice(0, 5);
+    state.aiModelMessage = `${model.name} executed locally and saved.`;
+  }
+
+  saveSession();
+  renderAppScreen();
 }
 
 function handleVoiceModeClick() {
@@ -1703,17 +2514,18 @@ function createLocalAiModel(prompt) {
     prompt,
     objective: `Execute this user request: ${prompt}`,
     inputs: ["user prompt", "current account context", "saved registration details"],
-    outputs: ["chatbot answer", "action summary", "saved model blueprint"],
+    outputs: ["executed result", "action summary", "saved model blueprint"],
     capabilities: inferLocalModelCapabilities(prompt),
     workflow: [
       "Understand the prompt.",
       "Check the current user context.",
-      "Answer in chat and save the model locally.",
+      "Execute the safest available version of the prompt.",
+      "Save the model locally.",
     ],
     execution: {
       provider: "local",
       status: "completed",
-      result: getAgentReply(prompt),
+      result: getLocalAiModelExecutionResult(prompt),
       executedAt: now,
     },
     status: "executed",
@@ -1723,6 +2535,23 @@ function createLocalAiModel(prompt) {
 
   saveLocalAiModel(model);
   return model;
+}
+
+function getLocalAiModelExecutionResult(prompt) {
+  const text = String(prompt || "").toLowerCase();
+  if (text.includes("admin") || text.includes("user")) {
+    return "Created an account-aware workflow with role checks before user actions.";
+  }
+
+  if (text.includes("login") || text.includes("verify")) {
+    return "Created a login workflow that checks session state and registration details.";
+  }
+
+  if (text.includes("pro") || text.includes("subscription")) {
+    return "Created a Pro workflow that marks eligible active users for faster access.";
+  }
+
+  return "Converted the prompt into a reusable model with inputs, outputs, workflow steps, and safety rules.";
 }
 
 function saveLocalAiModel(model) {
@@ -1780,10 +2609,14 @@ async function loadAdminUsers({ force = false } = {}) {
       throw new Error(data.message || "Could not load admin records.");
     }
 
+    const serverUsers = data.users || [];
     state.adminActor = data.actor || null;
-    state.adminUsers = data.users || [];
+    state.adminUsers = mergeAdminUsersWithLocal(serverUsers);
     state.adminStatus = "ready";
-    state.adminMessage = "";
+    state.adminMessage =
+      state.adminUsers.length > serverUsers.length
+        ? "Showing database users and old users saved in this browser."
+        : "";
     state.adminPreviewLink = "";
     if (data.actor) {
       state.role = data.actor.role || state.role;
@@ -1791,9 +2624,11 @@ async function loadAdminUsers({ force = false } = {}) {
       state.pro = Boolean(data.actor.pro);
     }
   } catch (error) {
-    state.adminUsers = [];
-    state.adminStatus = "error";
-    state.adminMessage = error.message;
+    state.adminUsers = mergeAdminUsersWithLocal([]);
+    state.adminStatus = state.adminUsers.length ? "ready" : "error";
+    state.adminMessage = state.adminUsers.length
+      ? "Could not reach the database, so this tab is showing old users saved in this browser."
+      : error.message;
     state.adminPreviewLink = "";
   }
 
@@ -1830,11 +2665,16 @@ async function runAdminAction({ email, action, days }) {
     const data = await readJsonResponse(response);
 
     if (!response.ok) {
+      if (response.status === 404 && findLocalUserByEmail(email).user) {
+        runLocalAdminAction({ email, action, days, keepServerUsers: true });
+        return;
+      }
+
       throw new Error(data.message || "This admin action could not be completed.");
     }
 
     state.adminActor = data.actor || null;
-    state.adminUsers = data.users || [];
+    state.adminUsers = mergeAdminUsersWithLocal(data.users || []);
     state.adminStatus = "ready";
     state.adminPreviewLink = data.rejoin?.previewLink || "";
     state.adminMessage =
@@ -1860,9 +2700,9 @@ function loadLocalAdminUsers() {
   const actor = users[state.email] || null;
 
   state.adminActor = actor;
-  state.adminUsers = Object.values(users).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+  state.adminUsers = mergeAdminUsersWithLocal([]);
   state.adminStatus = "ready";
-  state.adminMessage = "Admin tab opened from this browser's saved users.";
+  state.adminMessage = "Showing old users saved in this browser.";
   state.adminPreviewLink = "";
 
   if (actor) {
@@ -1875,9 +2715,11 @@ function loadLocalAdminUsers() {
   renderAppScreen();
 }
 
-function runLocalAdminAction({ email, action, days }) {
-  const users = getLocalUsers();
-  const target = users[email];
+function runLocalAdminAction({ email, action, days, keepServerUsers = false }) {
+  const found = findLocalUserByEmail(email);
+  const users = found.users;
+  const target = found.user;
+  const targetEmail = found.email;
 
   if (!target) {
     state.adminStatus = "error";
@@ -1938,17 +2780,18 @@ function runLocalAdminAction({ email, action, days }) {
   }
 
   target.updatedAt = now;
-  users[email] = target;
+  users[targetEmail] = target;
   saveLocalUsers(users);
 
-  if (email === state.email) {
+  if (targetEmail === state.email) {
     state.role = target.role;
     state.status = target.status;
     state.pro = Boolean(target.pro);
   }
 
   state.adminActor = users[state.email] || null;
-  state.adminUsers = Object.values(users).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+  const serverUsers = keepServerUsers ? state.adminUsers.filter((user) => !user.localOnly) : [];
+  state.adminUsers = mergeAdminUsersWithLocal(serverUsers);
   state.adminStatus = "ready";
   state.adminMessage = getAdminActionSuccessMessage(action, email, { days });
   if (action !== "send-rejoin-link") {
@@ -1965,6 +2808,82 @@ function clampLocalSuspensionDays(days) {
   }
 
   return Math.min(7, Math.max(3, Math.round(parsed)));
+}
+
+function mergeAdminUsersWithLocal(serverUsers = []) {
+  const merged = new Map();
+
+  serverUsers.forEach((user) => {
+    const email = String(user.email || "").trim().toLowerCase();
+    if (!email) {
+      return;
+    }
+
+    merged.set(email, {
+      ...user,
+      email,
+      localOnly: false,
+    });
+  });
+
+  Object.values(getLocalUsers()).forEach((user) => {
+    const email = String(user.email || "").trim().toLowerCase();
+    if (!email || merged.has(email)) {
+      return;
+    }
+
+    merged.set(email, {
+      ...user,
+      email,
+      localOnly: true,
+      lastIpAddress: user.lastIpAddress || "This browser",
+      lastDevice: user.lastDevice || navigator.userAgent || "This device",
+    });
+  });
+
+  return [...merged.values()].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+}
+
+function mergeChatThreadsWithLocal(serverThreads = []) {
+  const merged = new Map();
+  const localMessages = getLocalChatMessages();
+
+  serverThreads.forEach((thread) => {
+    const email = String(thread.email || "").trim().toLowerCase();
+    if (!email) {
+      return;
+    }
+
+    merged.set(email, {
+      ...thread,
+      email,
+      localOnly: false,
+    });
+  });
+
+  Object.values(getLocalUsers()).forEach((user) => {
+    const email = String(user.email || "").trim().toLowerCase();
+    if (!email || email === state.email || merged.has(email)) {
+      return;
+    }
+
+    const latestMessage = localMessages
+      .filter((message) => message.threadUserEmail === email)
+      .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))[0];
+
+    merged.set(email, {
+      email,
+      username: user.username,
+      name: user.name || user.email,
+      role: user.role || "user",
+      status: user.status || "active",
+      latestMessageAt: latestMessage?.createdAt || user.updatedAt || user.createdAt || 0,
+      latestMessage: latestMessage?.text || "",
+      localOnly: true,
+    });
+  });
+
+  return [...merged.values()].sort((a, b) => (b.latestMessageAt || 0) - (a.latestMessageAt || 0));
 }
 
 function getAdminActionSuccessMessage(action, email, details = {}) {
@@ -2135,6 +3054,15 @@ function applyApprovedLogin(approval, fallbackProfile = {}) {
   state.adminPreviewLink = "";
   state.aiModels = [];
   state.latestAiModel = null;
+  state.aiModelMessage = "";
+  state.chatThreads = [];
+  state.chatMessages = [];
+  state.chatTargetEmail = "";
+  state.chatStatus = "idle";
+  state.chatMessage = "";
+  state.miniGame = null;
+  state.miniGameMessage = "";
+  state.miniGameBestScore = 0;
   state.rejoinToken = "";
   state.rejoinMessage = "";
 }
@@ -2224,9 +3152,10 @@ async function signInLocalSavedAccount({ email, password, serverMessage }) {
   saveSession();
 }
 
-async function createAdminVerificationLink({ name, email, mobile }) {
+async function createAdminVerificationLink({ name, email, mobile, password, role = "user" }) {
   const normalizedEmail = String(email || "").trim().toLowerCase();
   const username = deriveUsernameFromEmail(normalizedEmail, name);
+  const inviteRole = normalizeInviteRole(role);
 
   if (state.role !== "admin") {
     throw new Error("Only admins can create verification links.");
@@ -2248,6 +3177,10 @@ async function createAdminVerificationLink({ name, email, mobile }) {
     throw new Error("Enter a valid phone number.");
   }
 
+  if (String(password || "").length < 6) {
+    throw new Error("Enter a temporary password with at least 6 characters.");
+  }
+
   if (state.sessionToken) {
     try {
       const response = await fetch("/api/admin/create-verification-link", {
@@ -2261,6 +3194,8 @@ async function createAdminVerificationLink({ name, email, mobile }) {
           email: normalizedEmail,
           mobile,
           username,
+          password,
+          role: inviteRole,
         }),
       });
       const data = await readJsonResponse(response);
@@ -2284,19 +3219,29 @@ async function createAdminVerificationLink({ name, email, mobile }) {
     email: normalizedEmail,
     mobile,
     username,
+    password,
+    forcedRole: inviteRole,
   });
 }
 
-function createLocalAdminVerificationLink(profile) {
+async function createLocalAdminVerificationLink(profile) {
+  const passwordSalt = createLocalVerificationToken();
+  const passwordHash = await hashLocalPassword(profile.password, passwordSalt);
   const token = `local-${base64UrlEncodeJson({
-    ...profile,
+    email: profile.email,
+    username: profile.username,
+    name: profile.name,
+    mobile: profile.mobile,
+    forcedRole: profile.forcedRole,
+    passwordSalt,
+    passwordHash,
     createdAt: Date.now(),
     expiresAt: Date.now() + 7 * 24 * 60 * 60 * 1000,
   })}`;
 
   return {
     verificationLink: `${window.location.href.split("#")[0]}#admin-verify/${token}`,
-    message: `Verification link created locally for ${profile.email}.`,
+    message: `${formatRole(profile.forcedRole)} verification link created locally for ${profile.email}.`,
   };
 }
 
@@ -2369,7 +3314,12 @@ function approveLocalAdminVerification(profile) {
   const now = Date.now();
   const email = String(profile.email || "").trim().toLowerCase();
   const username = normalizeUsername(profile.username || deriveUsernameFromEmail(email, profile.name));
-  const role = getLocalRoleForUsername(username) || existing.role || "user";
+  const forcedRole = profile.forcedRole || profile.role ? normalizeInviteRole(profile.forcedRole || profile.role) : "";
+  const role =
+    forcedRole ||
+    getLocalRoleForUsername(username) ||
+    existing.role ||
+    "user";
   const user = {
     ...existing,
     id: existing.id || `local-${now}`,
@@ -2379,6 +3329,9 @@ function approveLocalAdminVerification(profile) {
     mobile: profile.mobile,
     role,
     status: "active",
+    passwordHash: profile.passwordHash || existing.passwordHash || null,
+    passwordSalt: profile.passwordSalt || existing.passwordSalt || null,
+    passwordUpdatedAt: profile.passwordHash ? now : existing.passwordUpdatedAt || null,
     pro: Boolean(existing.pro),
     createdAt: existing.createdAt || now,
     updatedAt: now,
@@ -2436,10 +3389,10 @@ function getAgentReply(message) {
   }
 
   if (text.includes("help") || text.includes("do")) {
-    return "I can summarize this account, explain the email-link login, suggest security improvements, draft a welcome message, or help plan the next app feature.";
+    return "I can answer general questions, explain account details, help with login safety, draft messages, and think through app ideas.";
   }
 
-  return "I can help with login, verification, profile details, and safety checks. Try asking for an account summary or a security checklist.";
+  return "I can answer that in full when the server has an AI key connected. In this local fallback mode, I can still help with account, login, security, app planning, and saved model prompts.";
 }
 
 function formatRole(role) {
@@ -2492,6 +3445,11 @@ function shortenDevice(device) {
 
 function normalizeUsername(value) {
   return String(value || "").trim().replace(/^@/, "").toLowerCase();
+}
+
+function normalizeInviteRole(role) {
+  const value = String(role || "user").trim().toLowerCase();
+  return ["user", "pre-admin", "admin"].includes(value) ? value : "user";
 }
 
 function deriveUsernameFromEmail(email, fallbackName = "") {
@@ -2551,6 +3509,19 @@ function getLocalUsers() {
 
 function saveLocalUsers(users) {
   localStorage.setItem(LOCAL_USERS_STORAGE_KEY, JSON.stringify(users));
+}
+
+function getLocalChatMessages() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(LOCAL_CHAT_STORAGE_KEY) || "[]");
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveLocalChatMessages(messages) {
+  localStorage.setItem(LOCAL_CHAT_STORAGE_KEY, JSON.stringify(messages.slice(-300)));
 }
 
 function findLocalUserByEmail(email) {
@@ -2786,7 +3757,7 @@ function registerServiceWorker() {
   }
 
   window.addEventListener("load", () => {
-    navigator.serviceWorker.register("assets/service-worker.js").catch(() => {
+    navigator.serviceWorker.register("/service-worker.js").catch(() => {
       installMessage = "Install support is not available from this browser right now.";
     });
   });

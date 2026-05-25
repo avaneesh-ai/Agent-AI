@@ -1,4 +1,4 @@
-const CACHE_NAME = "secure-entry-v5";
+const CACHE_NAME = "secure-entry-v12";
 const APP_SHELL = [
   "../index.html",
   "styles.css",
