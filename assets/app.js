@@ -51,6 +51,7 @@ const state = {
   sharedServerStatus: "unknown",
   sharedServerMessage: "",
   sharedServerUserCount: null,
+  sharedServerUrl: "",
 };
 
 const storedSession = sessionStorage.getItem("secure-entry-session");
@@ -101,6 +102,7 @@ function clearSession() {
     sharedServerStatus: "unknown",
     sharedServerMessage: "",
     sharedServerUserCount: null,
+    sharedServerUrl: "",
   });
 }
 
@@ -694,8 +696,8 @@ async function renderAdminVerificationScreen(token) {
   const verification = await resolveAdminVerificationToken(token);
   const isValidToken = verification.valid;
   const profile = verification.profile || {};
-  const adminImportLink =
-    isValidToken && verification.source === "local" ? createAdminImportLink(profile) : "";
+  const canSaveToAdmin =
+    isValidToken && verification.source === "local" && canSaveAdminVerificationLinkHere();
 
   root.innerHTML = `
     <section class="screen">
@@ -718,13 +720,14 @@ async function renderAdminVerificationScreen(token) {
         }</p>
       </div>
       ${
-        adminImportLink
+        canSaveToAdmin
           ? `<div class="email-preview">
               <div class="email-preview-header">
-                <span>Admin return link</span>
-                <span>Send this back to Admin</span>
+                <span>Admin save</span>
+                <span>No Firebase needed</span>
               </div>
-              <a class="link-box" href="${escapeHtml(adminImportLink)}">${escapeHtml(adminImportLink)}</a>
+              <p class="screen-footer-note">You are on an Admin browser. Save this user into the Admin tab from this same verification link.</p>
+              <button class="button warning" type="button" id="save-admin-link-user">Save user to Admin</button>
             </div>`
           : ""
       }
@@ -741,6 +744,25 @@ async function renderAdminVerificationScreen(token) {
   `;
 
   if (isValidToken) {
+    document.querySelector("#save-admin-link-user")?.addEventListener("click", () => {
+      saveImportedAdminUser({
+        ...profile,
+        role: normalizeInviteRole(profile.forcedRole || profile.role || "user"),
+      });
+      state.adminStatus = "idle";
+      state.adminMessage = `${profile.email || "This user"} was saved to the Admin tab from the verification link.`;
+      state.adminPreviewLink = "";
+      saveSession();
+      if (state.verified) {
+        state.activeAppTab = "admin";
+        goTo("app");
+        return;
+      }
+
+      document.querySelector(".confirm-card p").textContent =
+        "User saved. Login as Admin on this browser, then open the Admin tab.";
+    });
+
     document.querySelector("#approve-admin-login").addEventListener("click", async (event) => {
       const button = event.currentTarget;
       button.disabled = true;
@@ -786,7 +808,7 @@ function renderAdminImportScreen(token) {
         ${
           isValidProfile
             ? `${escapeHtml(profile.name || "This user")} can now appear in the Admin tab on this browser with the admin action buttons.`
-            : "Ask the user to open the admin-created verification link again and send the Admin return link shown on that page."
+            : "Ask the user to open the admin-created verification link again, or open that same verification link on the admin browser."
         }
       </p>
 
@@ -974,19 +996,20 @@ function renderSharedDatabaseBanner() {
   const isConnected = status === "connected";
   const isChecking = status === "unknown" || status === "checking";
   const title = isConnected
-    ? "Shared database connected"
+    ? "Shared server connected"
     : isChecking
-      ? "Checking shared database"
-      : "Shared database not connected";
+      ? "Checking shared server"
+      : "Shared server not connected";
   const fallbackMessage =
-    "To show registered details from any tab, mobile, laptop, desktop, or Wi-Fi, everyone must use this same shared app server and database. Separate servers or static copies cannot see each other's users.";
+    "To show registered details from another tab, phone, laptop, desktop, or Wi-Fi, everyone must open the same running app server. A plain index.html file can only see this browser.";
   const message = isChecking
-    ? "Checking whether this app can collect users from every device through one shared database."
+    ? "Checking whether this app is connected to the no-Firebase shared server."
     : state.sharedServerMessage || fallbackMessage;
   const countText =
     isConnected && Number.isFinite(Number(state.sharedServerUserCount))
       ? `<span>${Number(state.sharedServerUserCount)} saved users</span>`
       : "";
+  const serverUrlText = isConnected && state.sharedServerUrl ? `<span>${escapeHtml(state.sharedServerUrl)}</span>` : "";
 
   return `
     <div class="server-status-banner ${isConnected ? "is-connected" : isChecking ? "is-checking" : "is-disconnected"}">
@@ -995,6 +1018,7 @@ function renderSharedDatabaseBanner() {
         <p>${escapeHtml(message)}</p>
       </div>
       <div class="server-status-actions">
+        ${serverUrlText}
         ${countText}
         <button class="button secondary server-status-refresh" type="button" id="refresh-server-status">Refresh</button>
       </div>
@@ -1007,6 +1031,7 @@ function setupSharedDatabaseBanner() {
     state.sharedServerStatus = "unknown";
     state.sharedServerMessage = "";
     state.sharedServerUserCount = null;
+    state.sharedServerUrl = "";
     saveSession();
     renderAppScreen();
   });
@@ -1457,7 +1482,7 @@ function renderAdminPanel() {
       <div class="admin-heading">
         <div>
           <h2>${tabTitle}</h2>
-          <p>Registered users from the shared database and old users saved in this browser appear here.</p>
+          <p>Registered users from the no-Firebase shared server and old users saved in this browser appear here.</p>
         </div>
         <button class="button secondary admin-refresh" type="button" id="admin-refresh">Refresh</button>
       </div>
@@ -1465,14 +1490,14 @@ function renderAdminPanel() {
         <span>Your role: ${escapeHtml(formatRole(state.role))}</span>
         <span>${state.sessionToken ? "Shared server connected" : "Shared server not connected"}</span>
         <span>Total shown: ${state.adminUsers.length}</span>
-        <span>Shared database: ${sharedUserCount}</span>
+        <span>Shared server: ${sharedUserCount}</span>
         ${localOnlyUserCount ? `<span>This browser only: ${localOnlyUserCount}</span>` : ""}
         <span>Free Pro value: $25</span>
       </div>
       ${
         !state.sessionToken
           ? `<div class="admin-message warning-admin-message">
-              <span>This Admin tab is local-only right now. Users from another phone, tab, laptop, desktop, or Wi-Fi will show only after this app is running with the shared server/database and this admin logs in through it.</span>
+              <span>This Admin tab is local-only right now. Users from another phone, tab, laptop, desktop, or Wi-Fi will show only after this app is running through the no-Firebase shared server and this admin logs in through that same address.</span>
             </div>`
           : ""
       }
@@ -2366,17 +2391,19 @@ async function checkSharedServerStatus({ allowAnonymous = false } = {}) {
     const data = await readJsonResponse(response);
 
     if (!response.ok || !data.ok) {
-      throw new Error(data.message || "Shared database status could not be checked.");
+      throw new Error(data.message || "Shared server status could not be checked.");
     }
 
     state.sharedServerStatus = "connected";
     state.sharedServerUserCount = Number(data.userCount || 0);
-    state.sharedServerMessage = `${data.databaseMode || "Shared database"} is active. Users who register through this same shared app server/database can appear in Admin and Pre-Admin from any device.`;
+    state.sharedServerUrl = data.accessUrl || "";
+    state.sharedServerMessage = `${data.databaseMode || "Shared server"} is active. Users who register through this same app address can appear in Admin and Pre-Admin from any device.`;
   } catch {
     state.sharedServerStatus = "disconnected";
     state.sharedServerUserCount = null;
+    state.sharedServerUrl = "";
     state.sharedServerMessage =
-      "This app is running without the shared server/database. It can only show users saved in this browser. To show users from any tab, mobile, laptop, desktop, or Wi-Fi, everyone must use the same shared app server and database.";
+      "This app is running without the shared server. It can only show users saved in this browser. To show users from another phone, tab, laptop, desktop, or Wi-Fi, everyone must open the same running app server.";
   }
 
   saveSession();
@@ -2825,7 +2852,7 @@ async function loadAdminUsers({ force = false } = {}) {
     state.adminStatus = "ready";
     state.adminMessage =
       state.adminUsers.length > serverUsers.length
-        ? "Showing database users and old users saved in this browser."
+        ? "Showing shared-server users and old users saved in this browser."
         : "";
     state.adminPreviewLink = "";
     if (data.actor) {
@@ -2837,7 +2864,7 @@ async function loadAdminUsers({ force = false } = {}) {
     state.adminUsers = mergeAdminUsersWithLocal([]);
     state.adminStatus = state.adminUsers.length ? "ready" : "error";
     state.adminMessage = state.adminUsers.length
-      ? "Could not reach the database, so this tab is showing old users saved in this browser."
+      ? "Could not reach the shared server, so this tab is showing old users saved in this browser."
       : error.message;
     state.adminPreviewLink = "";
   }
@@ -2915,7 +2942,7 @@ function loadLocalAdminUsers() {
   state.adminUsers = mergeAdminUsersWithLocal([]);
   state.adminStatus = "ready";
   state.adminMessage =
-    "Showing only old users saved in this browser. To see users from phones, tablets, other laptops, or different Wi-Fi, open the app through the shared server/database.";
+    "Showing only old users saved in this browser. To see users from phones, tablets, other laptops, or different Wi-Fi, open the app through the no-Firebase shared server.";
   state.adminPreviewLink = "";
 
   if (actor) {
@@ -3150,7 +3177,7 @@ async function requestVerificationEmail() {
     state.deliveryStatus = result.sent ? "sent" : "preview";
     state.deliveryMessage =
       result.message ||
-      "Registration saved in the shared database. Admin can see this user from any device.";
+      "Registration saved in the shared server. Admin can see this user from any device using the same app address.";
     state.verificationLink = sharedLink;
     state.token = "";
     saveSession();
@@ -3163,7 +3190,7 @@ async function requestVerificationEmail() {
 
     throw new Error(
       error?.localFallback || isNetworkError(error)
-        ? "Shared database is required. This login was not accepted because Admin would not be able to see it from other devices."
+        ? "The shared server is required. This login was not accepted because Admin would not be able to see it from other devices."
         : error.message,
     );
   }
@@ -3204,7 +3231,7 @@ function createLocalVerificationLinkForAdminFallback() {
   const token = createLocalVerificationToken();
   state.deliveryStatus = "preview";
   state.deliveryMessage =
-    "Local admin login allowed. The shared database is still required before normal users can join and appear in Admin from other devices.";
+    "Local admin login allowed. The no-Firebase shared server is still required before normal users can join and appear in Admin from other devices.";
   state.verificationLink = `${window.location.href.split("#")[0]}#verify/${token}`;
   state.token = token;
   state.role = getLocalRoleForCurrentProfile();
@@ -3222,6 +3249,10 @@ function canUseLocalAdminFallbackForSavedAccount(email) {
 
   const user = findLocalUserByEmail(email).user;
   return user?.role === "admin" || LOCAL_ADMIN_USERNAMES.includes(normalizeUsername(user?.username));
+}
+
+function canSaveAdminVerificationLinkHere() {
+  return state.role === "admin" || isThisLaptopAdminDevice();
 }
 
 async function resolveVerificationToken(token) {
@@ -3533,7 +3564,7 @@ async function createLocalAdminVerificationLink(profile) {
 
   return {
     verificationLink: `${window.location.href.split("#")[0]}#admin-verify/${token}`,
-    message: `${formatRole(profile.forcedRole)} verification link created locally for ${profile.email}. After the user opens it, ask them to send back the Admin return link shown on that page.`,
+    message: `${formatRole(profile.forcedRole)} verification link created locally for ${profile.email}. Send this link to the user. Admin can also open the same link on the admin browser and click Save user to Admin.`,
   };
 }
 
@@ -3728,7 +3759,7 @@ function createHelpfulLocalReply(message, firstName) {
   }
 
   if (text.includes("database") || text.includes("firebase")) {
-    return "A database stores app records in one shared place. For this app, the shared database is what lets Admin see users who log in from different phones, laptops, desktops, tabs, or Wi-Fi networks.";
+    return "The app can use its built-in shared server to store records in one place. That is what lets Admin see users who log in from different phones, laptops, desktops, tabs, or Wi-Fi networks without Firebase.";
   }
 
   if (text.includes("admin") || text.includes("pre-admin")) {
@@ -3904,8 +3935,8 @@ function saveImportedAdminUser(profile) {
     lastRegistrationAt: now,
     lastLoginAt: existing.lastLoginAt || null,
     loginCount: existing.loginCount || 0,
-    lastIpAddress: "Admin return link",
-    lastDevice: "Imported from user link",
+    lastIpAddress: "Verification link",
+    lastDevice: "Saved from admin verification link",
   };
 
   saveLocalUsers(users);

@@ -1,13 +1,13 @@
-const CACHE_NAME = "secure-entry-v23";
+const CACHE_NAME = "secure-entry-v25";
 const APP_SHELL = [
-  "../index.html",
-  "styles.css",
-  "app.js",
-  "admin-device.json",
-  "logo.svg",
-  "manifest.webmanifest",
-  "icons/icon-192.png",
-  "icons/icon-512.png",
+  "/",
+  "/index.html",
+  "/styles.css",
+  "/app.js",
+  "/logo.svg",
+  "/manifest.webmanifest",
+  "/icons/icon-192.png",
+  "/icons/icon-512.png",
 ];
 
 self.addEventListener("install", (event) => {
@@ -57,7 +57,7 @@ self.addEventListener("fetch", (event) => {
 
           return networkResponse;
         })
-        .catch(() => caches.match("../index.html"));
+        .catch(() => caches.match("/index.html"));
     }),
   );
 });
