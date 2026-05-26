@@ -114,6 +114,10 @@ function getRoute() {
     return { name: "admin-verify", token: hash.split("/")[1] };
   }
 
+  if (hash.startsWith("admin-import/")) {
+    return { name: "admin-import", token: hash.split("/")[1] };
+  }
+
   if (hash.startsWith("verify/")) {
     return { name: "confirm", token: hash.split("/")[1] };
   }
@@ -172,7 +176,8 @@ function render() {
     state.verified &&
     route.name !== "app" &&
     route.name !== "rejoin" &&
-    route.name !== "admin-verify"
+    route.name !== "admin-verify" &&
+    route.name !== "admin-import"
   ) {
     goTo("app");
     return;
@@ -203,6 +208,11 @@ function render() {
     return;
   }
 
+  if (route.name === "admin-import") {
+    renderAdminImportScreen(route.token);
+    return;
+  }
+
   if (route.name === "rejoin") {
     renderRejoinScreen(route.token);
     return;
@@ -223,6 +233,7 @@ function updateProgress(routeName) {
     sent: 2,
     confirm: 2,
     "admin-verify": 2,
+    "admin-import": 2,
     app: 2,
   }[routeName] ?? 0;
 
@@ -683,6 +694,8 @@ async function renderAdminVerificationScreen(token) {
   const verification = await resolveAdminVerificationToken(token);
   const isValidToken = verification.valid;
   const profile = verification.profile || {};
+  const adminImportLink =
+    isValidToken && verification.source === "local" ? createAdminImportLink(profile) : "";
 
   root.innerHTML = `
     <section class="screen">
@@ -704,6 +717,17 @@ async function renderAdminVerificationScreen(token) {
             : "For safety, admin-created links expire and cannot be reused."
         }</p>
       </div>
+      ${
+        adminImportLink
+          ? `<div class="email-preview">
+              <div class="email-preview-header">
+                <span>Admin return link</span>
+                <span>Send this back to Admin</span>
+              </div>
+              <a class="link-box" href="${escapeHtml(adminImportLink)}">${escapeHtml(adminImportLink)}</a>
+            </div>`
+          : ""
+      }
 
       <div class="actions">
         ${
@@ -744,6 +768,55 @@ async function renderAdminVerificationScreen(token) {
     clearSession();
     goTo("credentials");
   });
+}
+
+function renderAdminImportScreen(token) {
+  const profile = resolveAdminImportToken(token);
+  const isValidProfile = Boolean(profile?.email);
+
+  if (isValidProfile) {
+    saveImportedAdminUser(profile);
+  }
+
+  root.innerHTML = `
+    <section class="screen">
+      <p class="screen-kicker">Admin import</p>
+      <h1>${isValidProfile ? "User details added to Admin" : "This admin return link is not valid"}</h1>
+      <p class="screen-copy">
+        ${
+          isValidProfile
+            ? `${escapeHtml(profile.name || "This user")} can now appear in the Admin tab on this browser with the admin action buttons.`
+            : "Ask the user to open the admin-created verification link again and send the Admin return link shown on that page."
+        }
+      </p>
+
+      ${
+        isValidProfile
+          ? `<div class="confirm-card">
+              <h2>Saved registration details</h2>
+              <p>${escapeHtml(profile.email)} · ${escapeHtml(profile.mobile || "No mobile number")} · ${escapeHtml(formatRole(profile.role || profile.forcedRole || "user"))}</p>
+            </div>`
+          : ""
+      }
+
+      <div class="actions">
+        ${
+          state.verified
+            ? `<button class="button warning" type="button" id="open-admin-after-import">Open Admin</button>`
+            : `<button class="button warning" type="button" id="login-after-import">Login as Admin</button>`
+        }
+      </div>
+    </section>
+  `;
+
+  document.querySelector("#open-admin-after-import")?.addEventListener("click", () => {
+    state.activeAppTab = canUseAdminTab() ? "admin" : canUsePreAdminTab() ? "pre-admin" : "account";
+    state.adminStatus = "idle";
+    saveSession();
+    goTo("app");
+  });
+
+  document.querySelector("#login-after-import")?.addEventListener("click", () => goTo("credentials"));
 }
 
 async function renderRejoinScreen(token) {
@@ -3083,6 +3156,11 @@ async function requestVerificationEmail() {
     saveSession();
     return;
   } catch (error) {
+    if (canUseLocalAdminFallbackForCurrentProfile()) {
+      createLocalVerificationLinkForAdminFallback();
+      return;
+    }
+
     throw new Error(
       error?.localFallback || isNetworkError(error)
         ? "Shared database is required. This login was not accepted because Admin would not be able to see it from other devices."
@@ -3120,6 +3198,30 @@ async function requestServerVerificationLink() {
   }
 
   return data;
+}
+
+function createLocalVerificationLinkForAdminFallback() {
+  const token = createLocalVerificationToken();
+  state.deliveryStatus = "preview";
+  state.deliveryMessage =
+    "Local admin login allowed. The shared database is still required before normal users can join and appear in Admin from other devices.";
+  state.verificationLink = `${window.location.href.split("#")[0]}#verify/${token}`;
+  state.token = token;
+  state.role = getLocalRoleForCurrentProfile();
+  saveSession();
+}
+
+function canUseLocalAdminFallbackForCurrentProfile() {
+  return getLocalRoleForCurrentProfile() === "admin";
+}
+
+function canUseLocalAdminFallbackForSavedAccount(email) {
+  if (isThisLaptopAdminDevice()) {
+    return true;
+  }
+
+  const user = findLocalUserByEmail(email).user;
+  return user?.role === "admin" || LOCAL_ADMIN_USERNAMES.includes(normalizeUsername(user?.username));
 }
 
 async function resolveVerificationToken(token) {
@@ -3279,6 +3381,15 @@ async function signInExistingAccount({ email, password }) {
 
     throw new Error(data.message || "No saved account was found for this email ID.");
   } catch (error) {
+    if (canUseLocalAdminFallbackForSavedAccount(normalizedEmail)) {
+      await signInLocalSavedAccount({
+        email: normalizedEmail,
+        password,
+        serverMessage: "Shared database is not connected, so only saved local admins can enter.",
+      });
+      return;
+    }
+
     throw new Error(
       isNetworkError(error)
         ? "Shared database is required. This sign in was not accepted because Admin would not be able to see it from other devices."
@@ -3422,7 +3533,7 @@ async function createLocalAdminVerificationLink(profile) {
 
   return {
     verificationLink: `${window.location.href.split("#")[0]}#admin-verify/${token}`,
-    message: `${formatRole(profile.forcedRole)} verification link created locally for ${profile.email}.`,
+    message: `${formatRole(profile.forcedRole)} verification link created locally for ${profile.email}. After the user opens it, ask them to send back the Admin return link shown on that page.`,
   };
 }
 
@@ -3740,6 +3851,64 @@ function base64UrlDecodeJson(value) {
   } catch {
     return null;
   }
+}
+
+function createAdminImportLink(profile) {
+  const token = base64UrlEncodeJson({
+    email: String(profile.email || "").trim().toLowerCase(),
+    username: normalizeUsername(profile.username || deriveUsernameFromEmail(profile.email, profile.name)),
+    name: String(profile.name || "").trim(),
+    mobile: String(profile.mobile || "").trim(),
+    role: normalizeInviteRole(profile.forcedRole || profile.role || "user"),
+    createdAt: Number(profile.createdAt) || Date.now(),
+    importedAt: Date.now(),
+  });
+
+  return `${window.location.href.split("#")[0]}#admin-import/${token}`;
+}
+
+function resolveAdminImportToken(token) {
+  const profile = base64UrlDecodeJson(token);
+  if (!profile || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(profile.email || ""))) {
+    return null;
+  }
+
+  return {
+    email: String(profile.email || "").trim().toLowerCase(),
+    username: normalizeUsername(profile.username || deriveUsernameFromEmail(profile.email, profile.name)),
+    name: String(profile.name || "").trim() || "Imported user",
+    mobile: String(profile.mobile || "").trim(),
+    role: normalizeInviteRole(profile.role || profile.forcedRole || "user"),
+    createdAt: Number(profile.createdAt) || Date.now(),
+    importedAt: Number(profile.importedAt) || Date.now(),
+  };
+}
+
+function saveImportedAdminUser(profile) {
+  const users = getLocalUsers();
+  const existing = users[profile.email] || {};
+  const now = Date.now();
+
+  users[profile.email] = {
+    ...existing,
+    id: existing.id || `imported-${now}`,
+    email: profile.email,
+    username: profile.username,
+    name: profile.name,
+    mobile: profile.mobile,
+    role: profile.role,
+    status: existing.status && existing.status !== "removed" ? existing.status : "active",
+    pro: Boolean(existing.pro),
+    createdAt: existing.createdAt || profile.createdAt || now,
+    updatedAt: now,
+    lastRegistrationAt: now,
+    lastLoginAt: existing.lastLoginAt || null,
+    loginCount: existing.loginCount || 0,
+    lastIpAddress: "Admin return link",
+    lastDevice: "Imported from user link",
+  };
+
+  saveLocalUsers(users);
 }
 
 function getLocalUsers() {
