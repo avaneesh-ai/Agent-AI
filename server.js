@@ -23,7 +23,7 @@ const DATA_FILE =
   process.env.APP_DATA_FILE || path.join(ROOT_DIR, "data", "users.json");
 const PRO_PRICE = 25;
 const usersStore = loadUsersStore();
-const aiModelsStore = { models: [] };
+const aiModelsStore = { models: usersStore.aiModels };
 const firebaseConfig = { enabled: false };
 let firebaseTokenCache = null;
 
@@ -158,7 +158,9 @@ server.on("error", (error) => {
 
 server.listen(PORT, HOST, () => {
   console.log(`Secure Entry is running at http://${HOST}:${PORT}/`);
-  getServerAccessUrls().forEach((url) => {
+  const urls = getServerAccessUrls();
+  writeStartupLinksFile(urls);
+  urls.forEach((url) => {
     console.log(`Open from devices here: ${url}`);
   });
 });
@@ -935,8 +937,8 @@ async function handleCreateAiModel(request, response) {
 
   const body = await readJsonBody(request);
   const prompt = String(body.prompt || "").trim();
-  if (prompt.length < 4) {
-    sendJson(response, 400, { message: "Give the AI agent a clearer prompt first." });
+  if (!prompt) {
+    sendJson(response, 400, { message: "Type any prompt for the AI agent first." });
     return;
   }
 
@@ -961,7 +963,8 @@ async function handleCreateAiModel(request, response) {
   model.status = "executed";
   model.updatedAt = Date.now();
 
-  aiModelsStore.models.push(model);
+  aiModelsStore.models.unshift(model);
+  aiModelsStore.models = aiModelsStore.models.slice(0, 100);
   await persistAiModelRecord(model);
 
   sendJson(response, 200, {
@@ -1610,17 +1613,18 @@ function sendJson(response, statusCode, data) {
 function loadUsersStore() {
   try {
     if (!fs.existsSync(DATA_FILE)) {
-      return { users: {}, chatMessages: [] };
+      return { users: {}, chatMessages: [], aiModels: [] };
     }
 
     const parsed = JSON.parse(fs.readFileSync(DATA_FILE, "utf8"));
     return {
       users: parsed.users && typeof parsed.users === "object" ? parsed.users : {},
       chatMessages: Array.isArray(parsed.chatMessages) ? parsed.chatMessages : [],
+      aiModels: Array.isArray(parsed.aiModels) ? parsed.aiModels : [],
     };
   } catch (error) {
     console.error("Could not read user registry:", error.message);
-    return { users: {}, chatMessages: [] };
+    return { users: {}, chatMessages: [], aiModels: [] };
   }
 }
 
@@ -1675,6 +1679,9 @@ async function deleteUserRecord(email) {
 }
 
 async function persistAiModelRecord(model) {
+  usersStore.aiModels = aiModelsStore.models.slice(0, 100);
+  saveUsersStore();
+
   if (!firebaseConfig.enabled) {
     return;
   }
@@ -1688,6 +1695,7 @@ async function persistAiModelRecord(model) {
 
 function createPromptModel({ prompt, user }) {
   const now = Date.now();
+  const executionMode = getPromptExecutionMode(prompt);
   const words = prompt
     .toLowerCase()
     .replace(/[^a-z0-9\s-]/g, " ")
@@ -1702,20 +1710,17 @@ function createPromptModel({ prompt, user }) {
     ownerEmail: user.email,
     name: `${topic} Model`,
     prompt,
-    objective: `Execute this user request: ${prompt}`,
-    inputs: ["user prompt", "current account context", "saved registration details"],
-    outputs: ["step-by-step result", "action summary", "next recommended action"],
+    objective: `Execute and save a reusable AI model for this prompt: ${prompt}`,
+    mode: executionMode,
+    inputs: ["any user prompt", "current account context", "saved registration details", "safe execution rules"],
+    outputs: ["direct executed result", "action summary", "saved model blueprint", "next recommended action"],
     capabilities: inferModelCapabilities(prompt),
-    workflow: [
-      "Understand the prompt and extract the requested goal.",
-      "Check the current user context and permissions.",
-      "Execute the safe app action or create a structured plan.",
-      "Return a concise result and save this model blueprint.",
-    ],
+    workflow: getPromptModelWorkflow(prompt),
     safetyRules: [
       "Do not expose passwords or private tokens.",
       "Ask for admin approval before destructive account actions.",
       "Use shared records only through server-side permission checks.",
+      "If a request needs live internet or a private API key, say that clearly and still save the safest local model.",
     ],
     status: "created",
     createdAt: now,
@@ -1858,13 +1863,151 @@ function extractOpenAiText(data) {
   return parts.join("\n").trim();
 }
 
+function createServerPromptExecution(prompt) {
+  const originalPrompt = String(prompt || "").trim();
+  const text = originalPrompt.toLowerCase();
+  const knownAnswer = getKnownServerGeneralAnswer(originalPrompt);
+  const mathReply = getSimpleServerMathReply(originalPrompt);
+  const mode = getPromptExecutionMode(originalPrompt);
+
+  if (knownAnswer) {
+    return {
+      mode,
+      result: `Answered the prompt directly: ${knownAnswer}`,
+    };
+  }
+
+  if (mathReply) {
+    return {
+      mode: "math",
+      result: `Solved the calculation: ${mathReply}`,
+    };
+  }
+
+  if (text.includes("admin") || text.includes("user") || text.includes("account")) {
+    return {
+      mode,
+      result: "Built an account-aware model that checks user role, account status, and admin permissions before taking action.",
+    };
+  }
+
+  if (text.includes("login") || text.includes("verify")) {
+    return {
+      mode,
+      result: "Built a login model that verifies session state, records registration details, and blocks unsafe local-only user entries.",
+    };
+  }
+
+  if (text.includes("pro") || text.includes("subscription")) {
+    return {
+      mode,
+      result: "Built a Pro model that identifies eligible active users and prepares faster-access subscription actions.",
+    };
+  }
+
+  if (text.includes("write") || text.includes("letter") || text.includes("essay") || text.includes("draft")) {
+    return {
+      mode,
+      result: `Created a writing model for "${originalPrompt}". It will produce a clear opening, useful details, and a short conclusion or call to action.`,
+    };
+  }
+
+  if (text.includes("plan") || text.includes("steps") || text.includes("idea")) {
+    return {
+      mode,
+      result: `Created a planning model for "${originalPrompt}". It will turn the request into a goal, ordered steps, checks, and a next action.`,
+    };
+  }
+
+  return {
+    mode,
+    result: `Executed the prompt by converting "${originalPrompt}" into a reusable AI model with an input, workflow, safe execution rules, and saved output structure. Connect an AI key for deeper live-topic execution.`,
+  };
+}
+
+function getPromptExecutionMode(prompt) {
+  const text = String(prompt || "").toLowerCase();
+
+  if (getSimpleServerMathReply(prompt)) {
+    return "math";
+  }
+
+  if (text.includes("?") || text.startsWith("what") || text.startsWith("why") || text.startsWith("how") || text.includes("population")) {
+    return "question-answering";
+  }
+
+  if (text.includes("write") || text.includes("draft") || text.includes("essay") || text.includes("letter")) {
+    return "writing";
+  }
+
+  if (text.includes("admin") || text.includes("user") || text.includes("account")) {
+    return "account-workflow";
+  }
+
+  if (text.includes("plan") || text.includes("steps") || text.includes("idea")) {
+    return "planning";
+  }
+
+  return "general-prompt-execution";
+}
+
+function getPromptModelWorkflow(prompt) {
+  const mode = getPromptExecutionMode(prompt);
+  const sharedSteps = [
+    "Read the full user prompt.",
+    "Choose the safest execution mode.",
+    "Create a direct result for the prompt.",
+    "Save the prompt, mode, workflow, result, and safety rules as a reusable model.",
+  ];
+
+  if (mode === "question-answering") {
+    return [
+      "Identify the exact question.",
+      "Answer directly from available knowledge or the connected AI provider.",
+      "Explain the answer in simple language.",
+      "Save the question-answer workflow as a reusable model.",
+    ];
+  }
+
+  if (mode === "writing") {
+    return [
+      "Identify the audience and purpose.",
+      "Draft clear text with a beginning, details, and ending.",
+      "Keep the wording safe and useful.",
+      "Save the writing workflow as a reusable model.",
+    ];
+  }
+
+  if (mode === "account-workflow") {
+    return [
+      "Check the user's role and account status.",
+      "Avoid unsafe admin or destructive actions without permission.",
+      "Prepare the allowed account workflow.",
+      "Save the account workflow as a reusable model.",
+    ];
+  }
+
+  if (mode === "planning") {
+    return [
+      "Find the goal in the prompt.",
+      "Break the goal into ordered steps.",
+      "Add checks and a next action.",
+      "Save the planning workflow as a reusable model.",
+    ];
+  }
+
+  return sharedSteps;
+}
+
 function createLocalAgentReply({ prompt, user, model }) {
+  const execution = createServerPromptExecution(prompt);
   const capabilities = model.capabilities.join(", ");
   return [
-    `I executed your prompt for ${user.name || "this account"} and saved it as ${model.name}.`,
-    `Goal: ${model.objective}`,
-    `What I can do with this model: ${capabilities}.`,
-    `Result: ${getLocalExecutionSummary(prompt)}`,
+    `Executed and saved ${model.name} for ${user.name || "this account"}.`,
+    `Mode: ${execution.mode}.`,
+    `Result: ${execution.result}`,
+    `Saved model capabilities: ${capabilities}.`,
+    `Next use: give a similar prompt and this model can follow the saved workflow again.`,
   ].join("\n\n");
 }
 
@@ -1922,6 +2065,10 @@ function getSimpleServerMathReply(prompt) {
 
 function createHelpfulServerLocalReply(prompt, firstName) {
   const text = prompt.toLowerCase();
+  const knownAnswer = getKnownServerGeneralAnswer(prompt);
+  if (knownAnswer) {
+    return knownAnswer;
+  }
 
   if (text.includes("ai") || text.includes("artificial intelligence")) {
     return "AI means artificial intelligence. It is software that can understand patterns, answer questions, write text, classify information, and help automate tasks.";
@@ -1951,29 +2098,57 @@ function createHelpfulServerLocalReply(prompt, firstName) {
     return "A simple plan is: decide the goal, list the steps, choose the first small action, then improve after testing. Good apps usually start with one useful workflow and grow from there.";
   }
 
-  return `I can help with that, ${firstName}. A simple way to answer "${prompt}" is to break it into: what it means, why it matters, and one example. Ask me to explain it simply, make notes, draft text, or turn it into steps.`;
+  return createDirectServerLocalFallback(prompt, firstName);
+}
+
+function getKnownServerGeneralAnswer(prompt) {
+  const text = String(prompt || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (text.includes("india") && text.includes("populat")) {
+    return "India's population is about 1.47 billion people in 2026. Recent UN-based estimates are around 1.46 to 1.48 billion, making India the world's most populous country. This matters because population affects schools, jobs, hospitals, transport, housing, food, water, and government planning. Example: when a city has more people, it needs more buses, classrooms, doctors, and clean water.";
+  }
+
+  if (text.includes("india") && text.includes("capital")) {
+    return "The capital of India is New Delhi.";
+  }
+
+  if (text.includes("population")) {
+    return "Population means the number of people living in a place, such as a village, city, state, or country. It matters because governments use population to plan schools, hospitals, roads, water, jobs, and housing.";
+  }
+
+  if (text.includes("photosynthesis")) {
+    return "Photosynthesis is the process plants use to make food. They take sunlight, water, and carbon dioxide, then produce glucose and oxygen.";
+  }
+
+  if (text.includes("gravity")) {
+    return "Gravity is the force that pulls objects toward each other. On Earth, gravity pulls things toward the ground and keeps the Moon moving around Earth.";
+  }
+
+  return "";
+}
+
+function createDirectServerLocalFallback(prompt, firstName) {
+  const topic = String(prompt || "that question").trim();
+  return `I can help, ${firstName}. In local mode I do not have live internet facts for "${topic}" yet. If the server has an AI key connected, I can answer fully on any topic. Right now I can still answer built-in topics, solve basic maths, explain app features, make notes, draft text, and turn ideas into steps.`;
 }
 
 function getLocalExecutionSummary(prompt) {
-  const text = prompt.toLowerCase();
-  if (text.includes("admin") || text.includes("user")) {
-    return "I prepared an account-aware workflow that checks role permissions before changing user records.";
-  }
-
-  if (text.includes("login") || text.includes("verify")) {
-    return "I prepared a login workflow that confirms the current session and records registration details for admin review.";
-  }
-
-  if (text.includes("subscription") || text.includes("pro")) {
-    return "I prepared a Pro subscription workflow that can mark eligible active users for faster access.";
-  }
-
-  return "I converted the prompt into a reusable model blueprint with inputs, outputs, workflow steps, and safety rules.";
+  return createServerPromptExecution(prompt).result;
 }
 
 function inferModelCapabilities(prompt) {
   const text = prompt.toLowerCase();
-  const capabilities = ["prompt execution", "task planning", "saved model blueprint"];
+  const capabilities = [
+    "accepts any user prompt",
+    "prompt execution",
+    "task planning",
+    "saved model blueprint",
+    "direct result generation",
+  ];
 
   if (text.includes("admin") || text.includes("user") || text.includes("account")) {
     capabilities.push("account-aware actions");
@@ -1985,6 +2160,14 @@ function inferModelCapabilities(prompt) {
 
   if (text.includes("fast") || text.includes("pro") || text.includes("subscription")) {
     capabilities.push("subscription-aware workflow");
+  }
+
+  if (text.includes("write") || text.includes("essay") || text.includes("letter")) {
+    capabilities.push("writing and drafting");
+  }
+
+  if (text.includes("question") || text.includes("what") || text.includes("why") || text.includes("how")) {
+    capabilities.push("question answering");
   }
 
   return capabilities;
@@ -2402,6 +2585,23 @@ function getServerAccessUrls() {
     urls.add(`http://${address}:${PORT}/`);
   });
   return [...urls];
+}
+
+function writeStartupLinksFile(urls) {
+  const contents = [
+    "Secure Entry shared app links",
+    "",
+    "Keep the server window open, then send one of these links to users:",
+    ...urls,
+    "",
+    "Use the 192.168.x.x or 10.x.x.x link for phones and other computers on the same Wi-Fi.",
+  ].join("\n");
+
+  try {
+    fs.writeFileSync(path.join(ROOT_DIR, "app-link.txt"), `${contents}\n`);
+  } catch (error) {
+    console.error(`Could not write app-link.txt: ${error.message}`);
+  }
 }
 
 function getClientIp(request) {

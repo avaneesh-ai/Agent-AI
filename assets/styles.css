@@ -690,6 +690,7 @@ body[data-theme="dark"] .install-message {
   flex-wrap: wrap;
   gap: 8px;
   justify-content: flex-end;
+  max-width: 100%;
 }
 
 .server-status-actions span {
@@ -701,6 +702,26 @@ body[data-theme="dark"] .install-message {
   font-weight: 850;
   background: rgba(255, 255, 255, 0.56);
   border-radius: 999px;
+}
+
+.shared-server-link {
+  display: inline-flex;
+  align-items: center;
+  max-width: min(100%, 360px);
+  min-height: 34px;
+  padding: 0 10px;
+  overflow-wrap: anywhere;
+  color: #0f5c46;
+  font-size: 0.84rem;
+  font-weight: 850;
+  text-decoration: none;
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(31, 122, 91, 0.22);
+  border-radius: 8px;
+}
+
+.shared-server-link:hover {
+  text-decoration: underline;
 }
 
 .server-status-refresh {
@@ -719,6 +740,12 @@ body[data-theme="dark"] .server-status-banner.is-connected {
   color: #c9f7e4;
   background: #102d27;
   border-color: rgba(55, 184, 135, 0.32);
+}
+
+body[data-theme="dark"] .shared-server-link {
+  color: #9ef0cf;
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(158, 240, 207, 0.18);
 }
 
 .app-tabs {

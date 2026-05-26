@@ -1009,7 +1009,11 @@ function renderSharedDatabaseBanner() {
     isConnected && Number.isFinite(Number(state.sharedServerUserCount))
       ? `<span>${Number(state.sharedServerUserCount)} saved users</span>`
       : "";
-  const serverUrlText = isConnected && state.sharedServerUrl ? `<span>${escapeHtml(state.sharedServerUrl)}</span>` : "";
+  const serverUrlText =
+    isConnected && state.sharedServerUrl
+      ? `<a class="shared-server-link" href="${escapeHtml(state.sharedServerUrl)}">${escapeHtml(state.sharedServerUrl)}</a>
+         <button class="button secondary server-status-refresh" type="button" id="copy-shared-server-link">Copy link</button>`
+      : "";
 
   return `
     <div class="server-status-banner ${isConnected ? "is-connected" : isChecking ? "is-checking" : "is-disconnected"}">
@@ -1027,6 +1031,16 @@ function renderSharedDatabaseBanner() {
 }
 
 function setupSharedDatabaseBanner() {
+  document.querySelector("#copy-shared-server-link")?.addEventListener("click", async (event) => {
+    const button = event.currentTarget;
+    try {
+      await navigator.clipboard.writeText(state.sharedServerUrl);
+      button.textContent = "Copied";
+    } catch {
+      button.textContent = "Copy failed";
+    }
+  });
+
   document.querySelector("#refresh-server-status")?.addEventListener("click", () => {
     state.sharedServerStatus = "unknown";
     state.sharedServerMessage = "";
@@ -1351,7 +1365,7 @@ function renderAgentPanel() {
         </span>
         <div>
           <h2>Secure Entry AI</h2>
-          <p>Build executed AI models and chat in a separate question box.</p>
+          <p>Execute any prompt into a saved AI model, or chat in a separate question box.</p>
         </div>
       </div>
 
@@ -1365,8 +1379,8 @@ function renderAgentPanel() {
         ${renderLatestAiModel()}
         <form class="agent-form" id="ai-model-form">
           <label class="sr-only" for="ai-model-input">Prompt for AI model executor</label>
-          <input id="ai-model-input" name="message" type="text" autocomplete="off" placeholder="Prompt the AI model executor" />
-          <button class="button agent-send" type="submit">Execute</button>
+          <input id="ai-model-input" name="message" type="text" autocomplete="off" placeholder="Enter any prompt to execute and save as an AI model" />
+          <button class="button agent-send" type="submit">Execute model</button>
         </form>
       </section>
 
@@ -1422,7 +1436,7 @@ function renderLatestAiModel() {
       <div class="ai-model-card">
         ${state.aiModelMessage ? `<p class="ai-model-status">${escapeHtml(state.aiModelMessage)}</p>` : ""}
         <strong>No AI model created yet</strong>
-        <p>Enter a prompt above and the agent will execute it into a saved model blueprint.</p>
+        <p>Enter any prompt above and the agent will execute it into a saved AI model.</p>
       </div>
     `;
   }
@@ -1432,6 +1446,7 @@ function renderLatestAiModel() {
     <div class="ai-model-card">
       ${state.aiModelMessage ? `<p class="ai-model-status">${escapeHtml(state.aiModelMessage)}</p>` : ""}
       <strong>${escapeHtml(model.name)}</strong>
+      ${model.mode ? `<p class="ai-model-status">Mode: ${escapeHtml(model.mode)}</p>` : ""}
       <p>${escapeHtml(model.objective)}</p>
       ${model.execution?.result ? `<p>${escapeHtml(model.execution.result)}</p>` : ""}
       <div class="ai-model-tags">
@@ -1631,12 +1646,16 @@ function renderAdminUserCard(user) {
         ${
           user.localOnly
             ? `<div class="profile-row">
-                <span>Saved in</span>
+                <span>Login source</span>
                 <strong>This browser only</strong>
               </div>`
             : `<div class="profile-row">
-                <span>Saved in</span>
-                <strong>Shared database</strong>
+                <span>Login source</span>
+                <strong>Shared server - all devices visible</strong>
+              </div>
+              <div class="profile-row">
+                <span>Admin visibility</span>
+                <strong>Shown even if they logged in from another phone, laptop, desktop, tab, or Wi-Fi</strong>
               </div>`
         }
       </div>
@@ -2736,6 +2755,7 @@ async function requestAiModel(prompt) {
 }
 
 function createLocalAiModel(prompt) {
+  const execution = createLocalPromptExecution(prompt);
   const words = String(prompt)
     .toLowerCase()
     .replace(/[^a-z0-9\s-]/g, " ")
@@ -2749,20 +2769,16 @@ function createLocalAiModel(prompt) {
     ownerEmail: state.email,
     name: `${topic} Model`,
     prompt,
-    objective: `Execute this user request: ${prompt}`,
-    inputs: ["user prompt", "current account context", "saved registration details"],
-    outputs: ["executed result", "action summary", "saved model blueprint"],
+    objective: `Execute and save a reusable AI model for this prompt: ${prompt}`,
+    mode: execution.mode,
+    inputs: ["any user prompt", "current account context", "saved registration details", "safe execution rules"],
+    outputs: ["direct executed result", "action summary", "saved model blueprint", "next recommended action"],
     capabilities: inferLocalModelCapabilities(prompt),
-    workflow: [
-      "Understand the prompt.",
-      "Check the current user context.",
-      "Execute the safest available version of the prompt.",
-      "Save the model locally.",
-    ],
+    workflow: getLocalPromptModelWorkflow(prompt),
     execution: {
       provider: "local",
       status: "completed",
-      result: getLocalAiModelExecutionResult(prompt),
+      result: execution.result,
       executedAt: now,
     },
     status: "executed",
@@ -2775,20 +2791,143 @@ function createLocalAiModel(prompt) {
 }
 
 function getLocalAiModelExecutionResult(prompt) {
-  const text = String(prompt || "").toLowerCase();
+  return createLocalPromptExecution(prompt).result;
+}
+
+function createLocalPromptExecution(prompt) {
+  const originalPrompt = String(prompt || "").trim();
+  const text = originalPrompt.toLowerCase();
+  const knownAnswer = getKnownGeneralAnswer(originalPrompt);
+  const mathReply = getSimpleMathReply(originalPrompt);
+  const mode = getLocalPromptExecutionMode(originalPrompt);
+
+  if (knownAnswer) {
+    return {
+      mode,
+      result: `Answered the prompt directly: ${knownAnswer}`,
+    };
+  }
+
+  if (mathReply) {
+    return {
+      mode: "math",
+      result: `Solved the calculation: ${mathReply}`,
+    };
+  }
+
   if (text.includes("admin") || text.includes("user")) {
-    return "Created an account-aware workflow with role checks before user actions.";
+    return {
+      mode,
+      result: "Built an account-aware model that checks user role, account status, and admin permissions before taking action.",
+    };
   }
 
   if (text.includes("login") || text.includes("verify")) {
-    return "Created a login workflow that checks session state and registration details.";
+    return {
+      mode,
+      result: "Built a login model that verifies session state, records registration details, and blocks unsafe local-only user entries.",
+    };
   }
 
   if (text.includes("pro") || text.includes("subscription")) {
-    return "Created a Pro workflow that marks eligible active users for faster access.";
+    return {
+      mode,
+      result: "Built a Pro model that identifies eligible active users and prepares faster-access subscription actions.",
+    };
   }
 
-  return "Converted the prompt into a reusable model with inputs, outputs, workflow steps, and safety rules.";
+  if (text.includes("write") || text.includes("letter") || text.includes("essay") || text.includes("draft")) {
+    return {
+      mode,
+      result: `Created a writing model for "${originalPrompt}". It will produce a clear opening, useful details, and a short conclusion or call to action.`,
+    };
+  }
+
+  if (text.includes("plan") || text.includes("steps") || text.includes("idea")) {
+    return {
+      mode,
+      result: `Created a planning model for "${originalPrompt}". It will turn the request into a goal, ordered steps, checks, and a next action.`,
+    };
+  }
+
+  return {
+    mode,
+    result: `Executed the prompt by converting "${originalPrompt}" into a reusable AI model with an input, workflow, safe execution rules, and saved output structure. Connect an AI key for deeper live-topic execution.`,
+  };
+}
+
+function getLocalPromptExecutionMode(prompt) {
+  const text = String(prompt || "").toLowerCase();
+
+  if (getSimpleMathReply(prompt)) {
+    return "math";
+  }
+
+  if (text.includes("?") || text.startsWith("what") || text.startsWith("why") || text.startsWith("how") || text.includes("population")) {
+    return "question-answering";
+  }
+
+  if (text.includes("write") || text.includes("draft") || text.includes("essay") || text.includes("letter")) {
+    return "writing";
+  }
+
+  if (text.includes("admin") || text.includes("user") || text.includes("account")) {
+    return "account-workflow";
+  }
+
+  if (text.includes("plan") || text.includes("steps") || text.includes("idea")) {
+    return "planning";
+  }
+
+  return "general-prompt-execution";
+}
+
+function getLocalPromptModelWorkflow(prompt) {
+  const mode = getLocalPromptExecutionMode(prompt);
+  const sharedSteps = [
+    "Read the full user prompt.",
+    "Choose the safest execution mode.",
+    "Create a direct result for the prompt.",
+    "Save the prompt, mode, workflow, result, and safety rules as a reusable model.",
+  ];
+
+  if (mode === "question-answering") {
+    return [
+      "Identify the exact question.",
+      "Answer directly from available knowledge or the connected AI provider.",
+      "Explain the answer in simple language.",
+      "Save the question-answer workflow as a reusable model.",
+    ];
+  }
+
+  if (mode === "writing") {
+    return [
+      "Identify the audience and purpose.",
+      "Draft clear text with a beginning, details, and ending.",
+      "Keep the wording safe and useful.",
+      "Save the writing workflow as a reusable model.",
+    ];
+  }
+
+  if (mode === "account-workflow") {
+    return [
+      "Check the user's role and account status.",
+      "Avoid unsafe admin or destructive actions without permission.",
+      "Prepare the allowed account workflow.",
+      "Save the account workflow as a reusable model.",
+    ];
+  }
+
+  if (mode === "planning") {
+    return [
+      "Find the goal in the prompt.",
+      "Break the goal into ordered steps.",
+      "Add checks and a next action.",
+      "Save the planning workflow as a reusable model.",
+    ];
+  }
+
+  return sharedSteps;
 }
 
 function saveLocalAiModel(model) {
@@ -2799,7 +2938,13 @@ function saveLocalAiModel(model) {
 
 function inferLocalModelCapabilities(prompt) {
   const text = String(prompt).toLowerCase();
-  const capabilities = ["chatbot response", "prompt execution", "saved model blueprint"];
+  const capabilities = [
+    "accepts any user prompt",
+    "chatbot response",
+    "prompt execution",
+    "saved model blueprint",
+    "direct result generation",
+  ];
   if (text.includes("admin") || text.includes("user") || text.includes("account")) {
     capabilities.push("account-aware actions");
   }
@@ -2808,6 +2953,12 @@ function inferLocalModelCapabilities(prompt) {
   }
   if (text.includes("pro") || text.includes("subscription")) {
     capabilities.push("subscription workflow");
+  }
+  if (text.includes("write") || text.includes("essay") || text.includes("letter")) {
+    capabilities.push("writing and drafting");
+  }
+  if (text.includes("question") || text.includes("what") || text.includes("why") || text.includes("how")) {
+    capabilities.push("question answering");
   }
   return capabilities;
 }
@@ -3749,6 +3900,10 @@ function getSimpleMathReply(message) {
 
 function createHelpfulLocalReply(message, firstName) {
   const text = message.toLowerCase();
+  const knownAnswer = getKnownGeneralAnswer(message);
+  if (knownAnswer) {
+    return knownAnswer;
+  }
 
   if (text.includes("ai") || text.includes("artificial intelligence")) {
     return "AI means artificial intelligence. It is software that can understand patterns, answer questions, write text, classify information, and help automate tasks.";
@@ -3778,7 +3933,42 @@ function createHelpfulLocalReply(message, firstName) {
     return "A simple plan is: decide the goal, list the steps, choose the first small action, then improve after testing. Good apps usually start with one useful workflow and grow from there.";
   }
 
-  return `I can help with that, ${firstName}. A simple way to answer "${message}" is to break it into: what it means, why it matters, and one example. Ask me to explain it simply, make notes, draft text, or turn it into steps.`;
+  return createDirectLocalFallback(message, firstName);
+}
+
+function getKnownGeneralAnswer(message) {
+  const text = String(message || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (text.includes("india") && text.includes("populat")) {
+    return "India's population is about 1.47 billion people in 2026. Recent UN-based estimates are around 1.46 to 1.48 billion, making India the world's most populous country. This matters because population affects schools, jobs, hospitals, transport, housing, food, water, and government planning. Example: when a city has more people, it needs more buses, classrooms, doctors, and clean water.";
+  }
+
+  if (text.includes("india") && text.includes("capital")) {
+    return "The capital of India is New Delhi.";
+  }
+
+  if (text.includes("population")) {
+    return "Population means the number of people living in a place, such as a village, city, state, or country. It matters because governments use population to plan schools, hospitals, roads, water, jobs, and housing.";
+  }
+
+  if (text.includes("photosynthesis")) {
+    return "Photosynthesis is the process plants use to make food. They take sunlight, water, and carbon dioxide, then produce glucose and oxygen.";
+  }
+
+  if (text.includes("gravity")) {
+    return "Gravity is the force that pulls objects toward each other. On Earth, gravity pulls things toward the ground and keeps the Moon moving around Earth.";
+  }
+
+  return "";
+}
+
+function createDirectLocalFallback(message, firstName) {
+  const topic = String(message || "that question").trim();
+  return `I can help, ${firstName}. In local mode I do not have live internet facts for "${topic}" yet. If the server has an AI key connected, I can answer fully on any topic. Right now I can still answer built-in topics, solve basic maths, explain app features, make notes, draft text, and turn ideas into steps.`;
 }
 
 function formatRole(role) {
