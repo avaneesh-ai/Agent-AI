@@ -48,6 +48,9 @@ const state = {
   miniGameBestScore: 0,
   rejoinToken: "",
   rejoinMessage: "",
+  sharedServerStatus: "unknown",
+  sharedServerMessage: "",
+  sharedServerUserCount: null,
 };
 
 const storedSession = sessionStorage.getItem("secure-entry-session");
@@ -95,6 +98,9 @@ function clearSession() {
     miniGameBestScore: 0,
     rejoinToken: "",
     rejoinMessage: "",
+    sharedServerStatus: "unknown",
+    sharedServerMessage: "",
+    sharedServerUserCount: null,
   });
 }
 
@@ -833,6 +839,7 @@ function renderAppScreen() {
         ${renderInstallButton()}
       </div>
       ${installMessage ? `<p class="install-message">${escapeHtml(installMessage)}</p>` : ""}
+      ${renderSharedDatabaseBanner()}
 
       <div class="app-tabs" role="tablist" aria-label="App tabs">
         ${renderAppTabButton("account", "Account")}
@@ -859,6 +866,7 @@ function renderAppScreen() {
   });
 
   setupInstallButton();
+  setupSharedDatabaseBanner();
   setupAppTabInteractions();
 
   if (state.activeAppTab === "agent") {
@@ -876,6 +884,51 @@ function renderAppScreen() {
   if (state.activeAppTab === "admin" || state.activeAppTab === "pre-admin") {
     setupAdminInteractions();
   }
+
+  checkSharedServerStatus();
+}
+
+function renderSharedDatabaseBanner() {
+  const status = state.sharedServerStatus || "unknown";
+  const isConnected = status === "connected";
+  const isChecking = status === "unknown" || status === "checking";
+  const title = isConnected
+    ? "Shared database connected"
+    : isChecking
+      ? "Checking shared database"
+      : "Shared database not connected";
+  const fallbackMessage =
+    "To show registered details from any tab, mobile, laptop, desktop, or Wi-Fi, everyone must use this same shared app server and database. Separate servers or static copies cannot see each other's users.";
+  const message = isChecking
+    ? "Checking whether this app can collect users from every device through one shared database."
+    : state.sharedServerMessage || fallbackMessage;
+  const countText =
+    isConnected && Number.isFinite(Number(state.sharedServerUserCount))
+      ? `<span>${Number(state.sharedServerUserCount)} saved users</span>`
+      : "";
+
+  return `
+    <div class="server-status-banner ${isConnected ? "is-connected" : isChecking ? "is-checking" : "is-disconnected"}">
+      <div>
+        <strong>${escapeHtml(title)}</strong>
+        <p>${escapeHtml(message)}</p>
+      </div>
+      <div class="server-status-actions">
+        ${countText}
+        <button class="button secondary server-status-refresh" type="button" id="refresh-server-status">Refresh</button>
+      </div>
+    </div>
+  `;
+}
+
+function setupSharedDatabaseBanner() {
+  document.querySelector("#refresh-server-status")?.addEventListener("click", () => {
+    state.sharedServerStatus = "unknown";
+    state.sharedServerMessage = "";
+    state.sharedServerUserCount = null;
+    saveSession();
+    renderAppScreen();
+  });
 }
 
 function renderInstallButton() {
@@ -1709,9 +1762,9 @@ async function loadChatMessages({ force = false } = {}) {
   try {
     if (canUseStaffChat()) {
       const threadsResponse = await fetch("/api/chat/threads", {
-        headers: {
+        headers: getSharedRequestHeaders({
           Authorization: `Bearer ${state.sessionToken}`,
-        },
+        }),
       });
       const threadsData = await readJsonResponse(threadsResponse);
       if (!threadsResponse.ok) {
@@ -1749,9 +1802,9 @@ async function loadChatMessages({ force = false } = {}) {
 async function loadServerChatThread(userEmail) {
   const params = userEmail ? `?userEmail=${encodeURIComponent(userEmail)}` : "";
   const response = await fetch(`/api/chat/messages${params}`, {
-    headers: {
+    headers: getSharedRequestHeaders({
       Authorization: `Bearer ${state.sessionToken}`,
-    },
+    }),
   });
   const data = await readJsonResponse(response);
 
@@ -1815,8 +1868,10 @@ async function sendChatMessage(text) {
     const response = await fetch("/api/chat/messages", {
       method: "POST",
       headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${state.sessionToken}`,
+        ...getSharedRequestHeaders({
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${state.sessionToken}`,
+        }),
       },
       body: JSON.stringify({
         text: message,
@@ -2215,6 +2270,40 @@ function getSelectedChatThread(threads = getChatThreadOptions()) {
   );
 }
 
+async function checkSharedServerStatus() {
+  if (!state.verified || state.sharedServerStatus !== "unknown") {
+    return;
+  }
+
+  state.sharedServerStatus = "checking";
+  saveSession();
+
+  try {
+    const response = await fetch("/api/status", {
+      headers: getSharedRequestHeaders(),
+    });
+    const data = await readJsonResponse(response);
+
+    if (!response.ok || !data.ok) {
+      throw new Error(data.message || "Shared database status could not be checked.");
+    }
+
+    state.sharedServerStatus = "connected";
+    state.sharedServerUserCount = Number(data.userCount || 0);
+    state.sharedServerMessage = `${data.databaseMode || "Shared database"} is active. Users who register through this same shared app server/database can appear in Admin and Pre-Admin from any device.`;
+  } catch {
+    state.sharedServerStatus = "disconnected";
+    state.sharedServerUserCount = null;
+    state.sharedServerMessage =
+      "This app is running without the shared server/database. It can only show users saved in this browser. To show users from any tab, mobile, laptop, desktop, or Wi-Fi, everyone must use the same shared app server and database.";
+  }
+
+  saveSession();
+  if (state.verified) {
+    renderAppScreen();
+  }
+}
+
 async function validateCurrentSession() {
   if (!state.sessionToken || sessionValidationInFlight) {
     return;
@@ -2223,9 +2312,9 @@ async function validateCurrentSession() {
   sessionValidationInFlight = true;
   try {
     const response = await fetch("/api/session", {
-      headers: {
+      headers: getSharedRequestHeaders({
         Authorization: `Bearer ${state.sessionToken}`,
-      },
+      }),
     });
     const data = await readJsonResponse(response);
 
@@ -2497,8 +2586,10 @@ async function requestAgentChat(prompt) {
   const response = await fetch("/api/agent/chat", {
     method: "POST",
     headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${state.sessionToken}`,
+      ...getSharedRequestHeaders({
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${state.sessionToken}`,
+      }),
     },
     body: JSON.stringify({
       prompt,
@@ -2518,8 +2609,10 @@ async function requestAiModel(prompt) {
   const response = await fetch("/api/agent/model", {
     method: "POST",
     headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${state.sessionToken}`,
+      ...getSharedRequestHeaders({
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${state.sessionToken}`,
+      }),
     },
     body: JSON.stringify({ prompt }),
   });
@@ -2633,9 +2726,9 @@ async function loadAdminUsers({ force = false } = {}) {
 
   try {
     const response = await fetch("/api/admin/users", {
-      headers: {
+      headers: getSharedRequestHeaders({
         Authorization: `Bearer ${state.sessionToken}`,
-      },
+      }),
     });
     const data = await readJsonResponse(response);
 
@@ -2691,8 +2784,10 @@ async function runAdminAction({ email, action, days }) {
     const response = await fetch("/api/admin/users/action", {
       method: "POST",
       headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${state.sessionToken}`,
+        ...getSharedRequestHeaders({
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${state.sessionToken}`,
+        }),
       },
       body: JSON.stringify(payload),
     });
@@ -3001,7 +3096,7 @@ async function requestServerVerificationLink() {
   const response = await fetch("/api/send-verification-link", {
     method: "POST",
     headers: {
-      "Content-Type": "application/json",
+      ...getSharedRequestHeaders({ "Content-Type": "application/json" }),
     },
     body: JSON.stringify({
       email: state.email,
@@ -3067,7 +3162,7 @@ async function approveVerificationToken(token) {
   const response = await fetch("/api/approve-verification", {
     method: "POST",
     headers: {
-      "Content-Type": "application/json",
+      ...getSharedRequestHeaders({ "Content-Type": "application/json" }),
     },
     body: JSON.stringify({ token }),
   });
@@ -3086,7 +3181,7 @@ async function approveLocalVerification(profile) {
     const response = await fetch("/api/local-login", {
       method: "POST",
       headers: {
-        "Content-Type": "application/json",
+        ...getSharedRequestHeaders({ "Content-Type": "application/json" }),
       },
       body: JSON.stringify({
         email: profile.email || state.email,
@@ -3168,7 +3263,7 @@ async function signInExistingAccount({ email, password }) {
     const response = await fetch("/api/password-login", {
       method: "POST",
       headers: {
-        "Content-Type": "application/json",
+        ...getSharedRequestHeaders({ "Content-Type": "application/json" }),
       },
       body: JSON.stringify({ email: normalizedEmail, password }),
     });
@@ -3278,10 +3373,12 @@ async function createAdminVerificationLink({ name, email, mobile, password, role
     try {
       const response = await fetch("/api/admin/create-verification-link", {
         method: "POST",
-        headers: {
+      headers: {
+        ...getSharedRequestHeaders({
           "Content-Type": "application/json",
           Authorization: `Bearer ${state.sessionToken}`,
-        },
+        }),
+      },
         body: JSON.stringify({
           name,
           email: normalizedEmail,
@@ -3378,7 +3475,7 @@ async function approveAdminVerificationToken(token, profile, source) {
   const response = await fetch("/api/approve-admin-verification", {
     method: "POST",
     headers: {
-      "Content-Type": "application/json",
+      ...getSharedRequestHeaders({ "Content-Type": "application/json" }),
     },
     body: JSON.stringify({ token }),
   });
@@ -3454,8 +3551,13 @@ async function readJsonResponse(response) {
 }
 
 function getAgentReply(message) {
-  const text = message.toLowerCase();
+  const originalMessage = String(message || "").trim();
+  const text = originalMessage.toLowerCase();
   const firstName = state.name.split(" ")[0] || state.name || "there";
+
+  if (text.includes("hello") || text.includes("hi ") || text === "hi") {
+    return `Hi ${firstName}. Ask me anything, or ask me to help with this app, study notes, writing, coding, planning, or account questions.`;
+  }
 
   if (text.includes("summarize") || text.includes("account") || text.includes("profile")) {
     return `Here is your current profile: ${state.name}, email ${state.email}, mobile ${state.mobile}. Your login is verified for this session.`;
@@ -3485,7 +3587,65 @@ function getAgentReply(message) {
     return "I can answer general questions, explain account details, help with login safety, draft messages, and think through app ideas.";
   }
 
-  return "I can answer that in full when the server has an AI key connected. In this local fallback mode, I can still help with account, login, security, app planning, and saved model prompts.";
+  const mathReply = getSimpleMathReply(originalMessage);
+  if (mathReply) {
+    return mathReply;
+  }
+
+  return createHelpfulLocalReply(originalMessage, firstName);
+}
+
+function getSimpleMathReply(message) {
+  const expression = String(message || "")
+    .toLowerCase()
+    .replace(/\b(what is|calculate|solve|answer|please|equals)\b/g, "")
+    .replace(/[?=]/g, "")
+    .trim();
+
+  if (!/^[0-9+\-*/().\s]+$/.test(expression) || !/\d\s*[+\-*/]\s*\d/.test(expression)) {
+    return "";
+  }
+
+  try {
+    const result = Function(`"use strict"; return (${expression});`)();
+    return Number.isFinite(result) ? `${expression} = ${result}.` : "";
+  } catch {
+    return "";
+  }
+}
+
+function createHelpfulLocalReply(message, firstName) {
+  const text = message.toLowerCase();
+
+  if (text.includes("ai") || text.includes("artificial intelligence")) {
+    return "AI means artificial intelligence. It is software that can understand patterns, answer questions, write text, classify information, and help automate tasks.";
+  }
+
+  if (text.includes("html") || text.includes("css") || text.includes("javascript") || text.includes("coding")) {
+    return "For coding questions, break the problem into three parts: what should appear on screen, what data must be saved, and what should happen after a click. Then build the HTML, style it with CSS, and add the behavior with JavaScript.";
+  }
+
+  if (text.includes("database") || text.includes("firebase")) {
+    return "A database stores app records in one shared place. For this app, the shared database is what lets Admin see users who log in from different phones, laptops, desktops, tabs, or Wi-Fi networks.";
+  }
+
+  if (text.includes("admin") || text.includes("pre-admin")) {
+    return "Admins can manage users, roles, suspensions, removals, and Pro access. Pre-admins can help manage normal users, but they should not be able to remove admins or change admin-only roles.";
+  }
+
+  if (text.includes("study") || text.includes("exam") || text.includes("learn")) {
+    return "A good study plan is: read the topic once, write short notes, practice questions, then revise the mistakes. Study in small sessions and test yourself instead of only rereading.";
+  }
+
+  if (text.includes("write") || text.includes("letter") || text.includes("essay")) {
+    return "I can help write it. A clear structure is: start with the main point, add two or three supporting details, and end with the action or conclusion you want.";
+  }
+
+  if (text.includes("plan") || text.includes("idea")) {
+    return "A simple plan is: decide the goal, list the steps, choose the first small action, then improve after testing. Good apps usually start with one useful workflow and grow from there.";
+  }
+
+  return `I can help with that, ${firstName}. A simple way to answer "${message}" is to break it into: what it means, why it matters, and one example. Ask me to explain it simply, make notes, draft text, or turn it into steps.`;
 }
 
 function formatRole(role) {
@@ -3784,6 +3944,13 @@ function markThisLaptopAsAdminDevice() {
 
 function isThisLaptopAdminDevice() {
   return localStorage.getItem(LOCAL_DEVICE_ADMIN_STORAGE_KEY) === "1";
+}
+
+function getSharedRequestHeaders(headers = {}) {
+  return {
+    ...headers,
+    ...(isThisLaptopAdminDevice() ? { "X-This-Laptop-Admin": "1" } : {}),
+  };
 }
 
 function promoteLocalUsersOnThisLaptop() {

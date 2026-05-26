@@ -648,6 +648,72 @@ body[data-theme="dark"] .install-message {
   background: #102d27;
 }
 
+.server-status-banner {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-top: 14px;
+  padding: 12px;
+  color: #5f3b00;
+  background: #fff8e8;
+  border: 1px solid rgba(193, 127, 22, 0.36);
+  border-radius: 8px;
+}
+
+.server-status-banner.is-connected {
+  color: #174333;
+  background: #eaf7f1;
+  border-color: rgba(31, 122, 91, 0.24);
+}
+
+.server-status-banner strong {
+  display: block;
+  margin-bottom: 4px;
+}
+
+.server-status-banner p {
+  margin: 0;
+  line-height: 1.45;
+}
+
+.server-status-actions {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.server-status-actions span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 34px;
+  padding: 0 10px;
+  font-size: 0.82rem;
+  font-weight: 850;
+  background: rgba(255, 255, 255, 0.56);
+  border-radius: 999px;
+}
+
+.server-status-refresh {
+  min-height: 34px;
+  padding: 0 12px;
+  font-size: 0.84rem;
+}
+
+body[data-theme="dark"] .server-status-banner {
+  color: #ffe6a3;
+  background: #322714;
+  border-color: rgba(240, 184, 74, 0.42);
+}
+
+body[data-theme="dark"] .server-status-banner.is-connected {
+  color: #c9f7e4;
+  background: #102d27;
+  border-color: rgba(55, 184, 135, 0.32);
+}
+
 .app-tabs {
   display: flex;
   flex-wrap: wrap;
@@ -1641,6 +1707,14 @@ body[data-theme="dark"] .profile-row {
 
   .app-topbar {
     align-items: stretch;
+  }
+
+  .server-status-banner {
+    flex-direction: column;
+  }
+
+  .server-status-actions {
+    justify-content: flex-start;
   }
 
   .admin-actions {
