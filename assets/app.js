@@ -245,6 +245,7 @@ function renderCredentialsScreen() {
       <p class="screen-kicker">Step 1</p>
       <h1>Start with your login details</h1>
       <p class="screen-copy">Enter your email ID and password. Existing users can sign in directly, while new users can continue to profile details.</p>
+      ${renderSharedDatabaseBanner()}
       ${rejoinNotice}
 
       <form class="form-stack" id="credentials-form" novalidate>
@@ -268,6 +269,9 @@ function renderCredentialsScreen() {
       </form>
     </section>
   `;
+
+  setupSharedDatabaseBanner();
+  checkSharedServerStatus({ allowAnonymous: true });
 
   document.querySelector("#credentials-form").addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -368,6 +372,7 @@ function renderProfileScreen() {
       <p class="screen-kicker">Step 2</p>
       <h1>Add your profile details</h1>
       <p class="screen-copy">Fill in your username, name, and mobile number. When you click next, the app will create a verification link for this login.</p>
+      ${renderSharedDatabaseBanner()}
 
       <form class="form-stack" id="profile-form" novalidate>
         <div class="field">
@@ -396,6 +401,9 @@ function renderProfileScreen() {
       </form>
     </section>
   `;
+
+  setupSharedDatabaseBanner();
+  checkSharedServerStatus({ allowAnonymous: true });
 
   document.querySelector("#back-to-email").addEventListener("click", () => goTo("credentials"));
 
@@ -2270,8 +2278,8 @@ function getSelectedChatThread(threads = getChatThreadOptions()) {
   );
 }
 
-async function checkSharedServerStatus() {
-  if (!state.verified || state.sharedServerStatus !== "unknown") {
+async function checkSharedServerStatus({ allowAnonymous = false } = {}) {
+  if ((!state.verified && !allowAnonymous) || state.sharedServerStatus !== "unknown") {
     return;
   }
 
@@ -2301,6 +2309,8 @@ async function checkSharedServerStatus() {
   saveSession();
   if (state.verified) {
     renderAppScreen();
+  } else {
+    render();
   }
 }
 
@@ -3073,23 +3083,12 @@ async function requestVerificationEmail() {
     saveSession();
     return;
   } catch (error) {
-    const canFallBackToLocal =
-      error?.localFallback ||
-      isNetworkError(error) ||
-      String(error?.message || "").includes("shared server did not return");
-
-    if (!canFallBackToLocal) {
-      throw error;
-    }
+    throw new Error(
+      error?.localFallback || isNetworkError(error)
+        ? "Shared database is required. This login was not accepted because Admin would not be able to see it from other devices."
+        : error.message,
+    );
   }
-
-  const token = createLocalVerificationToken();
-  state.deliveryStatus = "preview";
-  state.deliveryMessage =
-    "Local verification link created. This works only in this browser, so users from another phone or Wi-Fi will not appear in Admin until the shared server/database is used.";
-  state.verificationLink = `${window.location.href.split("#")[0]}#verify/${token}`;
-  state.token = token;
-  saveSession();
 }
 
 async function requestServerVerificationLink() {
@@ -3257,7 +3256,6 @@ function applyApprovedLogin(approval, fallbackProfile = {}) {
 
 async function signInExistingAccount({ email, password }) {
   const normalizedEmail = String(email || "").trim().toLowerCase();
-  let serverMessage = "";
 
   try {
     const response = await fetch("/api/password-login", {
@@ -3279,21 +3277,14 @@ async function signInExistingAccount({ email, password }) {
       return;
     }
 
-    serverMessage = data.message || "No saved account was found for this email ID.";
-    if (response.status !== 404 && response.status !== 405) {
-      throw new Error(serverMessage);
-    }
+    throw new Error(data.message || "No saved account was found for this email ID.");
   } catch (error) {
-    if (!isNetworkError(error)) {
-      throw error;
-    }
+    throw new Error(
+      isNetworkError(error)
+        ? "Shared database is required. This sign in was not accepted because Admin would not be able to see it from other devices."
+        : error.message,
+    );
   }
-
-  await signInLocalSavedAccount({
-    email: normalizedEmail,
-    password,
-    serverMessage,
-  });
 }
 
 async function signInLocalSavedAccount({ email, password, serverMessage }) {

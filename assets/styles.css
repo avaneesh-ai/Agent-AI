@@ -293,6 +293,13 @@ body[data-theme="dark"] .theme-icon-moon {
   background: var(--line);
 }
 
+.app-version {
+  margin: -18px 0 20px;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
 .step-dot.is-active,
 .step-dot.is-done {
   border-color: var(--green);
