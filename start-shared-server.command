@@ -1,7 +1,7 @@
 #!/bin/zsh
 cd "$(dirname "$0")"
 
-echo "Starting Secure Entry shared server..."
+echo "Starting Agent_Ai shared server..."
 echo "Keep this window open while users are logging in."
 echo ""
 
@@ -17,6 +17,6 @@ fi
 npm start
 
 echo ""
-echo "Secure Entry stopped."
+echo "Agent_Ai stopped."
 echo "Press Return to close."
 read

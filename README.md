@@ -1,6 +1,6 @@
-# Secure Entry
+# Agent_Ai
 
-Secure Entry is a browser app with email-link login, username registration, admin and pre-admin controls, a no-Firebase shared server, and an AI agent tab.
+Agent_Ai is a browser app with email-link login, username registration, admin and pre-admin controls, a no-Firebase shared server, and an AI agent tab.
 
 ## Best GitHub Folder
 

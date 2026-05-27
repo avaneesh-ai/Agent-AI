@@ -1072,7 +1072,7 @@ async function handleInstallClick() {
   const button = document.querySelector("#install-app");
 
   if (isRunningInstalledApp()) {
-    installMessage = "Secure Entry is already installed on this device.";
+    installMessage = "Agent_Ai is already installed on this device.";
     renderAppScreen();
     return;
   }
@@ -1089,7 +1089,7 @@ async function handleInstallClick() {
     const choice = await deferredInstallPrompt.userChoice;
     installMessage =
       choice?.outcome === "accepted"
-        ? "Secure Entry is being installed."
+        ? "Agent_Ai is being installed."
         : "Install was not completed.";
   } catch {
     installMessage = "Use your browser menu and choose Install app or Add to Home Screen.";
@@ -1364,7 +1364,7 @@ function renderAgentPanel() {
           </svg>
         </span>
         <div>
-          <h2>Secure Entry AI</h2>
+          <h2>Agent_Ai</h2>
           <p>Execute any prompt into a saved AI model, or chat in a separate question box.</p>
         </div>
       </div>
@@ -2367,6 +2367,18 @@ function canUseStaffChat() {
   return state.role === "admin" || state.role === "pre-admin";
 }
 
+function getDefaultAppTabForRole(role) {
+  if (role === "admin") {
+    return "admin";
+  }
+
+  if (role === "pre-admin") {
+    return "pre-admin";
+  }
+
+  return "account";
+}
+
 function getChatThreadOptions() {
   if (!canUseStaffChat()) {
     return [
@@ -3004,7 +3016,9 @@ async function loadAdminUsers({ force = false } = {}) {
     state.adminMessage =
       state.adminUsers.length > serverUsers.length
         ? "Showing shared-server users and old users saved in this browser."
-        : "";
+        : serverUsers.length
+          ? "Showing shared-server users, including people who logged in from another phone, laptop, desktop, tab, or Wi-Fi."
+          : "No shared-server users found yet. Users will appear here after they log in through the same shared app link.";
     state.adminPreviewLink = "";
     if (data.actor) {
       state.role = data.actor.role || state.role;
@@ -3516,7 +3530,7 @@ function applyApprovedLogin(approval, fallbackProfile = {}) {
   state.deliveryStatus = "";
   state.deliveryMessage = "";
   state.verificationLink = "";
-  state.activeAppTab = "account";
+  state.activeAppTab = getDefaultAppTabForRole(state.role);
   state.agentMessages = [];
   state.adminUsers = [];
   state.adminActor = null;
@@ -3856,7 +3870,7 @@ function getAgentReply(message) {
   }
 
   if (text.includes("welcome") || text.includes("draft") || text.includes("message")) {
-    return `Welcome ${firstName}, your Secure Entry account is active. Your email link has been confirmed and you can now continue inside the app.`;
+    return `Welcome ${firstName}, your Agent_Ai account is active. Your email link has been confirmed and you can now continue inside the app.`;
   }
 
   if (text.includes("mobile") || text.includes("phone")) {
@@ -4384,7 +4398,7 @@ function setupInstallEvents() {
 
   window.addEventListener("appinstalled", () => {
     deferredInstallPrompt = null;
-    installMessage = "Secure Entry is installed.";
+    installMessage = "Agent_Ai is installed.";
 
     if (state.verified) {
       renderAppScreen();

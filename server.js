@@ -157,7 +157,7 @@ server.on("error", (error) => {
 });
 
 server.listen(PORT, HOST, () => {
-  console.log(`Secure Entry is running at http://${HOST}:${PORT}/`);
+  console.log(`Agent_Ai is running at http://${HOST}:${PORT}/`);
   const urls = getServerAccessUrls();
   writeStartupLinksFile(urls);
   urls.forEach((url) => {
@@ -1300,11 +1300,11 @@ async function sendVerificationEmail({ email, name, verificationLink }) {
     throw new Error("SMTP_NOT_CONFIGURED");
   }
 
-  const subject = "Confirm your Secure Entry login";
+  const subject = "Confirm your Agent_Ai login";
   const text = [
     `Hi ${name},`,
     "",
-    "Click this one-time verification link to continue logging in to Secure Entry:",
+    "Click this one-time verification link to continue logging in to Agent_Ai:",
     verificationLink,
     "",
     "This link expires in 15 minutes.",
@@ -1312,9 +1312,9 @@ async function sendVerificationEmail({ email, name, verificationLink }) {
 
   const html = `
     <div style="font-family: Arial, sans-serif; color: #182230; line-height: 1.5;">
-      <h2>Confirm your Secure Entry login</h2>
+      <h2>Confirm your Agent_Ai login</h2>
       <p>Hi ${escapeHtml(name)},</p>
-      <p>Click this one-time verification link to continue logging in to Secure Entry.</p>
+      <p>Click this one-time verification link to continue logging in to Agent_Ai.</p>
       <p>
         <a href="${escapeHtml(verificationLink)}" style="display: inline-block; padding: 12px 18px; color: #ffffff; background: #1f7a5b; border-radius: 8px; text-decoration: none; font-weight: 700;">
           Confirm login
@@ -1373,11 +1373,11 @@ async function sendRejoinEmail({ email, name, rejoinLink }) {
     throw new Error("SMTP_NOT_CONFIGURED");
   }
 
-  const subject = "Your Secure Entry rejoin link";
+  const subject = "Your Agent_Ai rejoin link";
   const text = [
     `Hi ${name},`,
     "",
-    "An admin or pre-admin has approved your return to Secure Entry.",
+    "An admin or pre-admin has approved your return to Agent_Ai.",
     "Use this one-time rejoin link to register again:",
     rejoinLink,
     "",
@@ -1385,12 +1385,12 @@ async function sendRejoinEmail({ email, name, rejoinLink }) {
   ].join("\n");
   const html = `
     <div style="font-family: Arial, sans-serif; color: #182230; line-height: 1.5;">
-      <h2>Return to Secure Entry</h2>
+      <h2>Return to Agent_Ai</h2>
       <p>Hi ${escapeHtml(name)},</p>
       <p>An admin or pre-admin has approved your return. Use this one-time rejoin link to register again.</p>
       <p>
         <a href="${escapeHtml(rejoinLink)}" style="display: inline-block; padding: 12px 18px; color: #ffffff; background: #1f7a5b; border-radius: 8px; text-decoration: none; font-weight: 700;">
-          Rejoin Secure Entry
+          Rejoin Agent_Ai
         </a>
       </p>
       <p>This link expires in 7 days.</p>
@@ -1768,7 +1768,7 @@ async function createOpenAiAgentReply({ prompt, user, model, history }) {
     body: JSON.stringify({
       model: process.env.OPENAI_MODEL || "gpt-5-mini",
       instructions:
-        "You are Secure Entry's AI chatbot. Answer like a helpful assistant, execute the user's prompt as far as this app safely can, and explain the saved AI model blueprint in plain language. Never reveal secrets, passwords, tokens, or private keys.",
+        "You are Agent_Ai's AI chatbot. Answer like a helpful assistant, execute the user's prompt as far as this app safely can, and explain the saved AI model blueprint in plain language. Never reveal secrets, passwords, tokens, or private keys.",
       input: [
         {
           role: "user",
@@ -1812,7 +1812,7 @@ async function createOpenAiGeneralChatReply({ prompt, user, history }) {
     body: JSON.stringify({
       model: process.env.OPENAI_MODEL || "gpt-5-mini",
       instructions:
-        "You are Secure Entry's general AI chat box. Answer questions on any topic in plain language. Use the user's account context only when the question is about this app. Do not reveal secrets, passwords, private keys, or tokens.",
+        "You are Agent_Ai's general AI chat box. Answer questions on any topic in plain language. Use the user's account context only when the question is about this app. Do not reveal secrets, passwords, private keys, or tokens.",
       input: [
         {
           role: "user",
@@ -2033,7 +2033,7 @@ function createLocalGeneralChatReply({ prompt, user }) {
   }
 
   if (text.includes("welcome") || text.includes("message")) {
-    return `Welcome ${firstName}, your Secure Entry account is active and ready to use.`;
+    return `Welcome ${firstName}, your Agent_Ai account is active and ready to use.`;
   }
 
   const mathReply = getSimpleServerMathReply(originalPrompt);
@@ -2589,7 +2589,7 @@ function getServerAccessUrls() {
 
 function writeStartupLinksFile(urls) {
   const contents = [
-    "Secure Entry shared app links",
+    "Agent_Ai shared app links",
     "",
     "Keep the server window open, then send one of these links to users:",
     ...urls,

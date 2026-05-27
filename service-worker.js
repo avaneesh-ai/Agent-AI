@@ -1,4 +1,4 @@
-const CACHE_NAME = "secure-entry-v29";
+const CACHE_NAME = "agent-ai-v31";
 const APP_SHELL = [
   "/",
   "/index.html",
